@@ -159,6 +159,26 @@ menu "Pins / TMC"
     string
   config PIN_SELECTOR_ENDSTOP
     string
+
+  config PIN_IDLER_UART
+    string
+  config PIN_IDLER_CS
+    string
+  config PIN_IDLER_STEP
+    string
+  config PIN_IDLER_DIR
+    string
+  config PIN_IDLER_ENABLE
+    string
+  config PIN_IDLER_DIAG
+    string
+  config PIN_SR_DATA
+    string
+  config PIN_SR_CLOCK
+    string
+  config PIN_SR_LATCH
+    string
+
   @repeat var=i min=4 max=11@
     config PIN_GATE_ENDSTOP_$(i)
       string
@@ -241,6 +261,30 @@ menu "Pins / TMC"
       $(pin_help)
 
   comment "_" if MMU_HAS_SELECTOR_STEPPER || MMU_HAS_SELECTOR_SERVO
+
+
+  if MMU_HAS_IDLER
+    menu "Idler pins"
+      config PIN_IDLER_UART
+        prompt "Idler UART pin      "
+      config PIN_IDLER_CS
+        prompt "Idler CS pin        "
+      config PIN_IDLER_STEP
+        prompt "Idler step pin      "
+      config PIN_IDLER_DIR
+        prompt "Idler dir pin       "
+      config PIN_IDLER_ENABLE
+        prompt "Idler enable pin    "
+      config PIN_IDLER_DIAG
+        prompt "Idler diag pin      "
+      config PIN_SR_DATA
+        prompt "Shift register data pin"
+      config PIN_SR_CLOCK
+        prompt "Shift register clock pin"
+      config PIN_SR_LATCH
+        prompt "Shift register latch pin"
+    endmenu
+  endif
 
 
   # -------------------------------------
