@@ -57,6 +57,21 @@ menu "Gear stepper"
       default PARAM_GEAR_STALLGUARD_THRESHOLD
   @endrepeat@
 
+  config PARAM_GEAR_STEALTHCHOP
+    int
+    default 0
+    help
+      Speeds below this use stealthChop. 0 = always spreadCycle (default,
+      more torque). 999999 = always stealthChop (e.g. Prusa MMU3 which
+      does no gear stallguard homing).
+
+  config PARAM_GEAR_FREEWHEEL
+    int
+    default 0
+    help
+      Set 1 to freewheel the gear motor when disabled (TMC driver_FREEWHEEL,
+      e.g. Prusa MMU3 so filament can be pulled by hand).
+
   if MULTIGEAR
     menu "Per-gear overrides"
       help

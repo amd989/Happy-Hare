@@ -73,6 +73,13 @@ if MMU_HAS_SELECTOR_STEPPER
       help
         200 for 1.8 degree, 400 for 0.9 degree
 
+    config PARAM_SELECTOR_STEALTHCHOP
+      int
+      default 100
+      help
+        Speeds below this use stealthChop. Set 0 for always spreadCycle --
+        required for tmc2130 StallGuard homing (stealthChop disables it).
+
     comment "_"
     comment "_Behavior"
 
