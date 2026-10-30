@@ -352,7 +352,7 @@ class MmuController(MmuFilamentMovement):
             # on a perfectly good one (and vice versa).
             if self.gate_selected != TOOL_GATE_UNKNOWN and self.mmu_unit(self.gate_selected).calibrator.check_calibrated(CALIBRATED_SELECTOR):
                 try:
-                    self.log_info(f"Selecting last gate used ({self.gate_selected})...")
+                    self.log_info(f"Selecting last gate used ({self.selected_gate_string()})...")
                     self.select_gate(self.gate_selected)
                 except Exception as e:
                     # This is recoverable so just report errors
@@ -455,18 +455,6 @@ class MmuController(MmuFilamentMovement):
                     self.reactor.monotonic() + BOOT_CLOCK_CONVERGENCE_DELAY)
             else:
                 self._bootup_autohome()
-            # Make sure the gate is really selected (allows selectors to initialize
-            # themselves). Ask the unit that owns the gate: the autohoming loop variable
-            # would be whichever unit happened to be last, so an uncalibrated final unit
-            # used to veto a reselect on a perfectly good one (and vice versa).
-            if self.gate_selected != TOOL_GATE_UNKNOWN and self.mmu_unit(self.gate_selected).calibrator.check_calibrated(CALIBRATED_SELECTOR):
-                try:
-                    self.log_info(f"Selecting last gate used ({self.selected_gate_string()})...")
-                    self.select_gate(self.gate_selected)
-                except Exception as e:
-                    # This is recoverable so just report errors
-                    self.log_error(str(e))
-
 
             # Initial state (this will also enable the leds with opening effect)
             self.psm.set_print_state("initialized")

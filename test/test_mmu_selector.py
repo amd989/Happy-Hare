@@ -1489,6 +1489,16 @@ class TestPersistedPositionRestore(unittest.TestCase):
         self.assertAlmostEqual(self.believed_position(), selector.selector_offsets[self.GATE],
                                places=3)
 
+    def test_bootup_reselects_the_last_gate_exactly_once(self):
+        """
+        The reselect lives in _bootup_autohome, which a shift-register machine (Prusa MMU3)
+        defers until the MCU clock settles. A second copy left in cmd_MMU_BOOTUP ran it again
+        straight away: twice for everyone, and too early on the MMU3.
+        """
+        hh = self.boot(calibrate=True, selected_gate=self.GATE, selector_last_pos=True)
+        reselects = [line for line in hh.console if 'Selecting last gate used' in line]
+        self.assertEqual(len(reselects), 1, reselects)
+
     def test_a_gate_with_no_position_on_record_falls_back_to_its_offset(self):
         """
         last_pos missing but the gate still persisted - what an upgrade or a renamed unit leaves
