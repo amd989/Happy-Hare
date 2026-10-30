@@ -60,9 +60,9 @@ menu "Pins / TMC"
     config PIN_GEAR_DIR_SR
       string
       prompt "$(pad,$(pin_pad),Gear SR dir bit)"
+      validator "$(pin_validator)"
       help
-        Shift register bit carrying the real DIR signal (e.g. mmu_sr:0)
-        when dir_pin is a dummy GPIO (Prusa MMU3). Leave blank otherwise.
+        Shift register bit carrying the real DIR signal, e.g. mmu_sr:0, when dir_pin$(nl)is a dummy GPIO (Prusa MMU3). Leave blank otherwise.$(nl)$(pin_help)
 
     config PIN_GEAR_STEP
       string "$(pad,$(pin_pad),Gear step pin)"
@@ -152,9 +152,6 @@ menu "Pins / TMC"
   endmenu
 
 
-  config PIN_SELECTOR_DIR_SR
-    string
-
   # -------------------------------------
   # Selector stepper and servo
   # -------------------------------------
@@ -168,6 +165,8 @@ menu "Pins / TMC"
   config PIN_SELECTOR_DIAG
     string
   config PIN_SELECTOR_ENDSTOP
+    string
+  config PIN_SELECTOR_DIR_SR
     string
 
   config PIN_IDLER_UART
@@ -238,9 +237,9 @@ menu "Pins / TMC"
           $(pin_help)
       config PIN_SELECTOR_DIR_SR
         prompt "$(pad,$(pin_pad),Selector SR dir bit)"
+        validator "$(pin_validator)"
         help
-          Shift register bit carrying the real DIR signal (e.g. mmu_sr:2)
-          when dir_pin is a dummy GPIO (Prusa MMU3). Leave blank otherwise.
+          Shift register bit carrying the real DIR signal, e.g. mmu_sr:0, when dir_pin$(nl)is a dummy GPIO (Prusa MMU3). Leave blank otherwise.$(nl)$(pin_help)
       config PIN_SELECTOR_ENABLE
         prompt "$(pad,$(pin_pad),Selector enable pin)"
         validator "$(pin_validator)"
@@ -283,25 +282,55 @@ menu "Pins / TMC"
   if MMU_HAS_IDLER
     menu "Idler pins"
       config PIN_IDLER_UART
-        prompt "Idler UART pin      "
+        prompt "$(pad,$(pin_pad),Idler UART pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_IDLER_CS
-        prompt "Idler CS pin        "
+        prompt "$(pad,$(pin_pad),Idler CS pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_IDLER_DIR_SR
-        prompt "Idler SR dir bit    "
+        prompt "$(pad,$(pin_pad),Idler SR dir bit)"
+        validator "$(pin_validator)"
+        help
+          Shift register bit carrying the real DIR signal, e.g. mmu_sr:0, when dir_pin$(nl)is a dummy GPIO (Prusa MMU3). Leave blank otherwise.$(nl)$(pin_help)
       config PIN_IDLER_STEP
-        prompt "Idler step pin      "
+        prompt "$(pad,$(pin_pad),Idler step pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_IDLER_DIR
-        prompt "Idler dir pin       "
+        prompt "$(pad,$(pin_pad),Idler dir pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_IDLER_ENABLE
-        prompt "Idler enable pin    "
+        prompt "$(pad,$(pin_pad),Idler enable pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_IDLER_DIAG
-        prompt "Idler diag pin      "
+        prompt "$(pad,$(pin_pad),Idler diag pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_SR_DATA
-        prompt "Shift register data pin"
+        prompt "$(pad,$(pin_pad),Shift register data pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_SR_CLOCK
-        prompt "Shift register clock pin"
+        prompt "$(pad,$(pin_pad),Shift register clock pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
       config PIN_SR_LATCH
-        prompt "Shift register latch pin"
+        prompt "$(pad,$(pin_pad),Shift register latch pin)"
+        validator "$(pin_validator)"
+        help
+          $(pin_help)
     endmenu
   endif
 

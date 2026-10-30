@@ -26,6 +26,7 @@ FIXED_COUNT_TYPES = {
     'MMU_TYPE_VVD_1_0': 4,
     'MMU_TYPE_QIDI_BOX_1_0': 4,
     'MMU_TYPE_HTLF_1_0': 4,
+    'MMU_TYPE_PRUSA_MMU3_3_0': 5,
 }
 
 

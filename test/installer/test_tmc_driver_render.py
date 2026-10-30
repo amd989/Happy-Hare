@@ -25,10 +25,14 @@ ACCEPTED = {
                 'diag_pin', 'driver_SGTHRS'},
     'tmc2208': {'uart_pin', 'uart_address', 'run_current', 'hold_current',
                 'interpolate', 'sense_resistor', 'stealthchop_threshold'},
+    # diag0_pin, not diag_pin: chips with a diag0_stall register read
+    # diag0_pin/diag1_pin in Klipper's TMCVirtualPinHelper, so diag_pin
+    # leaves the virtual endstop without a pin ('tmc virtual endstop
+    # requires diag pin config', seen on a Prusa MMU3)
     'tmc2130': {'cs_pin', 'spi_bus', 'spi_software_sclk_pin',
                 'spi_software_mosi_pin', 'spi_software_miso_pin',
                 'run_current', 'hold_current', 'interpolate',
-                'sense_resistor', 'stealthchop_threshold', 'diag_pin',
+                'sense_resistor', 'stealthchop_threshold', 'diag0_pin',
                 'driver_SGT'},
     # No hold_current and no stealthchop: spreadCycle only, idles via
     # idle_current_percent. No virtual endstop either, so no touch homing.

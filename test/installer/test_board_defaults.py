@@ -55,6 +55,7 @@ BOARD_MACHINE = {
     'boards/Kconfig.tzb_1_0':                ('BOARD_TYPE_TZB_1_0', _TRADRACK),
     'boards/Kconfig.wgb_3_0':                ('BOARD_TYPE_WGB_3_0', _TRADRACK),
     'boards/custom/Kconfig.kms':             ('BOARD_TYPE_KMS_1_0', 'MMU_TYPE_KMS_1_0'),
+    'boards/custom/Kconfig.prusa_mmu3':      ('BOARD_TYPE_PRUSA_MMU3_1_0', 'MMU_TYPE_PRUSA_MMU3_3_0'),
     'boards/custom/Kconfig.qidi_box':        ('BOARD_TYPE_QIDI_BOX_2_0', 'MMU_TYPE_QIDI_BOX_1_0'),
     'boards/custom/Kconfig.vvd':             ('BOARD_TYPE_VVD_1_0', 'MMU_TYPE_VVD_1_0'),
     # Both of these declare BOARD_TYPE_EBB_GEN1. The per_gate copy is only
@@ -83,6 +84,7 @@ EXPECTED_WINS = {
     'boards/Kconfig.skr_pico_1': 15,            'boards/Kconfig.tzb_1_0': 32,
     'boards/Kconfig.wgb_3_0': 44,               'boards/custom/Kconfig.kms': 39,
     'boards/custom/Kconfig.qidi_box': 23,       'boards/custom/Kconfig.vvd': 24,
+    'boards/custom/Kconfig.prusa_mmu3': 24,
     'boards/per_gate/Kconfig.ebb_gen1': 59,     'boards/per_gate/Kconfig.slb': 64,
 }
 

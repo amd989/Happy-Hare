@@ -101,7 +101,7 @@ if MMU_HAS_IDLER
       default 40
       help
         Distance to search for the idler home position. The MMU3 idler barrel
-        homes by driving against its mechanical stop (stallguard), so this
+        homes by stalling against its mechanical stop (StallGuard), so this
         must be at least one full rotation.
 
   endmenu

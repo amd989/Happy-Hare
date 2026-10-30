@@ -8,12 +8,9 @@ config MMU_TYPE_PRUSA_MMU3_3_0
   select UNSELECT_MMU_HAS_FILAMENT_BUFFER
   select UNSELECT_CREATE_MCU_ENVIRONMENT_SENSORS  # ATmega32U4 has no MCU temperature sensor
 
-  select BOOL_REQUIRE_BOWDEN_MOVE
   select UNSELECT_VARIABLE_BOWDEN_LENGTHS # Disable
   select UNSELECT_FILAMENT_ALWAYS_GRIPPED # Disable
-  select UNSELECT_MMU_HAS_BYPASS          # No bypass gate
 
-  select DISABLE_NUM_GATES_OPTION
 
 if MMU_TYPE_PRUSA_MMU3_3_0
 
@@ -22,6 +19,8 @@ if MMU_TYPE_PRUSA_MMU3_3_0
   config PARAM_VERSION
     default "3.0"
   config PARAM_NUM_GATES
+    default 5
+  config PARAM_DESIGN_NUM_GATES
     default 5
 
   choice BOARD_TYPE
@@ -186,10 +185,6 @@ if MMU_TYPE_PRUSA_MMU3_3_0
 
   config CUSTOM_LED_SETUP
     def_bool y
-
-  if SHOW_MMU_ADDITIONS_WITH_TYPE
-    source "Kconfig.mmu_additions"
-  endif
 
   source "Kconfig.capabilities"
 
