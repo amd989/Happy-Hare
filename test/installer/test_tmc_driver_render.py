@@ -176,5 +176,28 @@ class TestNoDriverMeansNoDriverSection(unittest.TestCase):
                     % (touch, live))
 
 
+class TestIdlerSenseResistor(unittest.TestCase):
+    """The idler's sense resistor was hard-coded to 0.110, so a board with a
+    different shunt (set for gear and selector) ran its idler at about half
+    the configured current. It now follows the selector unless set itself."""
+
+    def _idler_sense(self, syms):
+        profile = profiles.get('prusa_mmu3')
+        if syms:
+            profile = profile.derive('idler_rsense_%d' % len(syms), syms=syms)
+        rendered = cfg.render(profile)
+        path = [p for p in rendered if p.endswith('mmu_hardware.cfg')][0]
+        parsed = cfg.assemble({path: rendered[path]})
+        return parsed.get('tmc2130 mmu_stepper unit0_idler', 'sense_resistor')
+
+    def test_defaults_to_the_selector_value(self):
+        self.assertEqual(float(self._idler_sense({})), 0.110)
+        self.assertEqual(float(self._idler_sense({'PARAM_SELECTOR_SENSE_RESISTOR': '0.22'})), 0.22)
+
+    def test_can_be_set_on_its_own(self):
+        self.assertEqual(float(self._idler_sense({'PARAM_SELECTOR_SENSE_RESISTOR': '0.22',
+                                                  'PARAM_IDLER_SENSE_RESISTOR': '0.15'})), 0.15)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -6,6 +6,7 @@
 #   PARAM_IDLER_ROTATION_DISTANCE
 #   PARAM_IDLER_RUN_CURRENT
 #   PARAM_IDLER_HOLD_CURRENT
+#   PARAM_IDLER_SENSE_RESISTOR
 #   PARAM_IDLER_FULL_STEPS_PER_ROTATION
 #   PARAM_IDLER_TMC
 #   PARAM_IDLER_SPI_BUS
@@ -35,6 +36,15 @@ if MMU_HAS_IDLER
     config PARAM_IDLER_HOLD_CURRENT
       float "Idler hold current             "
       default 0.2
+
+    config PARAM_IDLER_SENSE_RESISTOR
+      float "Idler TMC sense resistor       "
+      default PARAM_SELECTOR_SENSE_RESISTOR
+      help
+        Current-sense resistor on the idler driver. Klipper converts the
+        run/hold currents into driver register values with it, so a wrong
+        value silently changes the real current. Defaults to the selector's
+        value, since both drivers sit on the same board.
 
     config PARAM_IDLER_FULL_STEPS_PER_ROTATION
       int "Idler full steps per rotation  "
