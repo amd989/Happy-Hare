@@ -116,22 +116,25 @@ if MMU_TYPE_PRUSA_MMU3_3_0
   # Gear move speeds for the MMU3's ATmega32U4 (2.5KB RAM, ~115 move
   # queue nodes). Klipper's queue_step compression can only group ~2-4
   # steps per command through the acceleration phase, so the accel-phase
-  # step budget (v^2 / 2a * steps_per_mm) must stay small. With the gear
-  # at 165 steps/mm that means keeping v^2/2a under ~0.7mm; the generic
-  # 100mm/s / accel 100 defaults make the accel phase 50mm long and shut
-  # the MCU down on every gear move ("Move queue overflow" -- verified
-  # on the live MMU3: 25mm/s at accel 50 fails, accel >= ~400 passes).
-  # Cruise compression is excellent, so only the accel/decel phases pay.
+  # step budget (v^2 / 2a * steps_per_mm) must stay small: low accel
+  # means a long, expensive accel phase. The generic 100mm/s / accel 100
+  # defaults shut the MCU down on every gear move ("Move queue overflow"
+  # -- verified on the live MMU3: 25mm/s at accel 50 fails, accel >= ~400
+  # passes). Cruise compression is excellent, so only accel/decel pay.
 
   config PARAM_GEAR_LOAD_SPEED
-    default 25
+    default 60
     help
-      Bowden load speed for the MMU3 AVR. v^2/2a = 0.39mm at accel 800
-      keeps the accel-phase step burst within the move queue budget.
+      Stock pulleyLoadFeedrate. Tested on a live MMU3 (8 microsteps,
+      83.6 steps/mm, accel 800): 40, 60 and 80mm/s loads and unloads all
+      fit the move queue (80mm/s = 334 accel-phase steps). Swaps took
+      79s at 60mm/s against ~96s at the old 25mm/s.
   config PARAM_GEAR_LOAD_ACCEL
     default 800
   config PARAM_GEAR_UNLOAD_SPEED
-    default 25
+    default 60
+    help
+      Stock pulleyUnloadFeedrate. Tested together with the load speed.
   config PARAM_GEAR_UNLOAD_ACCEL
     default 800
   config PARAM_GEAR_SHORT_MOVE_SPEED

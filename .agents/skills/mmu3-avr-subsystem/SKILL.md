@@ -1,6 +1,6 @@
 ---
 name: mmu3-avr-subsystem
-description: Explains the Prusa MMU3's ATmega32U4 (2.5KB RAM, USB CDC) constraints that shape this fork's movement and shift-register code — the ~115-node MCU move-queue budget and why gear speed/accel defaults are 25mm/s @ accel 800 (accel-phase step budget v^2/2a), the SHR16 shift-register bitbang architecture and the write-coalescing / one-bitbang-in-flight / all-motor gating / LED-deferral design in shift_register.py, and the USB CDC timing hazards (clock-sync convergence, the 30s delayed SR init, minclock=0 burst strategy, 500us command spacing). Use this whenever touching extras/shift_register.py, mmu_stepper.py's _pre_set_dir_pin / dir_sr_pin, gear/idler/selector speed or acceleration defaults in installer/mmu_types/Kconfig.prusa, the MMU3 board Kconfig, or debugging "Move queue overflow", "Rescheduled timer in the past", or "Timer too close" on unit0 — even for something as simple as "why is the gear so slow" or "the MMU3 shut down mid-move".
+description: Explains the Prusa MMU3's ATmega32U4 (2.5KB RAM, USB CDC) constraints that shape this fork's movement and shift-register code — the ~115-node MCU move-queue budget and why gear load/unload defaults are 60mm/s @ accel 800 (accel-phase step budget v^2/2a, low accel is what overflows), the SHR16 shift-register bitbang architecture and the write-coalescing / one-bitbang-in-flight / all-motor gating / LED-deferral design in shift_register.py, and the USB CDC timing hazards (clock-sync convergence, the 30s delayed SR init, minclock=0 burst strategy, 500us command spacing). Use this whenever touching extras/shift_register.py, mmu_stepper.py's _pre_set_dir_pin / dir_sr_pin, gear/idler/selector speed or acceleration defaults in installer/mmu_types/Kconfig.prusa, the MMU3 board Kconfig, or debugging "Move queue overflow", "Rescheduled timer in the past", or "Timer too close" on unit0 — even for something as simple as "why is the gear so slow" or "the MMU3 shut down mid-move".
 ---
 
 # Prusa MMU3 AVR subsystem (ATmega32U4 + SHR16)
@@ -55,10 +55,14 @@ machine); see the references for the full derivations:
   run). **The acceleration phase is the budget killer**: `add` quantization
   limits it to ~2-4 steps/command near standstill, so its cost is
   `steps_in_accel = v^2/(2a) × steps_per_mm`.
-- **The rule**: keep `v^2/(2a)` under ~0.7mm. At 165 steps/mm (gear,
-  19.394mm/rev @ 16 microsteps) that means `a ≥ v^2/1.4`-ish: 25mm/s needs
-  a ≥ ~450, so the shipped MMU3 defaults are **25mm/s @ accel 800** (load),
-  **30mm/s @ accel 800** (short moves) — see
+- **The rule**: keep acceleration high (≥ ~400) so the accel phase is
+  short. The original ~0.7mm `v^2/(2a)` limit (derived at 165 steps/mm, 16
+  microsteps) turned out conservative: with the gear at stock 8 microsteps
+  (83.6 steps/mm, 19.147mm/rev) and one bitbang in flight, real loads and
+  unloads at 40, 60 and 80mm/s @ accel 800 all passed on the live MMU3
+  (80mm/s = 4mm, 334 accel-phase steps). Shipped MMU3 defaults:
+  **60mm/s @ accel 800** load/unload (stock pulleyLoad/UnloadFeedrate),
+  **30mm/s @ accel 800** short moves — see
   `installer/mmu_types/Kconfig.prusa`.
 - Empirically verified on the live MMU3: 25mm/s fails at accel 50 and 200,
   passes at accel 400+. **Microsteps don't fix it** (halving steps/mm still

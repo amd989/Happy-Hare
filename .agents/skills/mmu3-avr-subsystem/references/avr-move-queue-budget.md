@@ -54,6 +54,13 @@ Shipped defaults (from this rule): load **25mm/s @ accel 800**
 | 5mm/s, a=25 | 82 | PASS |
 | 8µsteps, 25mm/s, a=50 | 515 | FAIL (microsteps don't fix it) |
 | 100mm @ defaults (25mm/s, a=800) | 0.39mm | PASS |
+| 8µsteps (83.6 steps/mm), real bowden load+unload, 40mm/s a=800 | 1mm, 84 steps | PASS |
+| 8µsteps, real bowden load+unload, 60mm/s a=800 | 2.25mm, 188 steps | PASS (4 more swaps too) |
+| 8µsteps, real bowden load+unload, 80mm/s a=800 | 4mm, 334 steps | PASS |
+
+The last three rows (2026-11-01, after the one-bitbang-in-flight SR fix)
+show the 0.7mm rule is conservative at high accel: the gear load/unload
+default moved from 25 to 60mm/s (stock Prusa). Low accel still fails.
 
 ## Things that do NOT help (verified, don't re-try)
 
