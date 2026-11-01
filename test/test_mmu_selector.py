@@ -1849,9 +1849,8 @@ class TestPersistedPositionRestore(unittest.TestCase):
         paired the gate had already been dropped by then, so bootup silently re-selected the
         unit's FIRST gate instead of the one the user was on.
 
-        startup_home_selector is set live rather than in config: the shipped template hardcodes
-        0 for every physical selector (config/base/mmu_parameters.cfg), so there is no profile
-        to switch to.
+        startup_home_selector is set live rather than in config so the test doesn't depend on
+        which selector types default it on (only the MMU3 does).
         """
         from extras.mmu.mmu_constants import BOOT_CLOCK_CONVERGENCE_DELAY
 

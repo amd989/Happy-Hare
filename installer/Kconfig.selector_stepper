@@ -85,11 +85,14 @@ if MMU_HAS_SELECTOR_STEPPER
 
     config PARAM_STARTUP_HOME_SELECTOR
       boolint "Home selector at startup?"
+      default 1 if LINEAR_IDLER_SELECTOR
       default 0
       help
         1 = force MMU homing on startup if unloaded, then reselect the last gate used
         0 = trust the position saved at shutdown, so no homing is needed (an explicit
             MMU_MOTORS_OFF discards that saved position and does require a re-home)
+        Default 1 on the MMU3: its selector is unpowered while Klipper restarts and
+        can drift, and stock Prusa firmware homes it at every power-up.
 
 
     # -------------------------------------
