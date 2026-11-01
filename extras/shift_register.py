@@ -233,6 +233,11 @@ class ShiftRegister:
 
         # Initial state (all outputs low)
         self.state = 0
+        # Until the deferred initial write (_delayed_sr_write) has run, the MCU
+        # clock estimate can't be trusted: bit changes only update self.state
+        # and ride along with that write. None = no connect yet.
+        self._initial_write_time = None
+        self._initial_write_done = False
         # End print_time of the most recently scheduled bitbang; used to
         # serialize writes so two overlapping bitbangs never send the MCU
         # timer dispatcher backwards ("Rescheduled timer in the past").
@@ -319,7 +324,9 @@ class ShiftRegister:
         so the 30s delay also cleanly avoids the SPI/SR race condition.
         """
         reactor = self.printer.get_reactor()
-        reactor.register_timer(self._delayed_sr_write, reactor.monotonic() + 30.0)
+        self._initial_write_time = reactor.monotonic() + 30.0
+        self._initial_write_done = False
+        reactor.register_timer(self._delayed_sr_write, self._initial_write_time)
 
     def _delayed_sr_write(self, eventtime):
         """Reactor timer callback: write SR state 30s after klippy:connect.
@@ -328,6 +335,7 @@ class ShiftRegister:
         with a short lead time is accurate.
         """
         print_time = self.mcu.estimated_print_time(eventtime + 0.100)
+        self._initial_write_done = True
         self._write_register(print_time)
         return self.printer.get_reactor().NEVER
 
@@ -376,6 +384,13 @@ class ShiftRegister:
         shift register write or merged into a pending one).
         """
         self._set_bit(bit_num, value)
+        if not self._initial_write_done and self._initial_write_time is not None:
+            # Too early after connect to schedule a timed write: a bitbang with a
+            # 100ms lead arrived late and shut the MCU down ("Timer too close",
+            # seen when a motor enable or DIR change landed ~13s after connect).
+            # The new state goes out with the deferred initial write; report that
+            # time so callers (e.g. _pre_set_dir_pin) wait for it.
+            return self.mcu.estimated_print_time(self._initial_write_time + 0.100)
         # Guarantee at least 100ms into the future from NOW.
         # This handles stale print_times (e.g. SET_PIN with no recent moves).
         # 100ms is ample once Klipper's clock sync has converged; for the

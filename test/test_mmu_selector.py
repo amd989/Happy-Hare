@@ -1190,6 +1190,35 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         self.assertIsNone(sr._pending_write_start)
         self.assertGreater(sr._last_write_end, start)
 
+    def test_sr_changes_before_the_initial_write_ride_along_with_it(self):
+        """
+        Until the deferred initial write (~30s after connect) the AVR's clock
+        estimate is unreliable, and a bitbang scheduled with the normal 100ms
+        lead shut the MCU down ("Timer too close" ~13s after connect). Early
+        bit changes must only update the state and go out with that write.
+        """
+        sr = self.hh.printer.lookup_object('shift_register mmu_sr')
+        reactor = self.hh.printer.get_reactor()
+        now_pt = sr.mcu.estimated_print_time(reactor.monotonic())
+
+        # Model a fresh connect: the initial write is still 25s away
+        sr._pending_write_start = None
+        sr._last_write_end = now_pt
+        sr._initial_write_done = False
+        sr._initial_write_time = reactor.monotonic() + 25.0
+        end_before = sr._last_write_end
+
+        start = sr._set_bit_at_time(4, 1, now_pt + 0.1)    # idler DIR, urgent
+        self.assertEqual((sr.state >> 4) & 1, 1, 'the state still records the change')
+        self.assertIsNone(sr._pending_write_start, 'no write of its own was scheduled')
+        self.assertEqual(sr._last_write_end, end_before, 'nothing was bitbanged')
+        self.assertGreater(start, now_pt + 20.0, 'callers are told it goes out with the initial write')
+
+        # The initial write itself then goes out normally
+        sr._delayed_sr_write(reactor.monotonic())
+        self.assertTrue(sr._initial_write_done)
+        self.assertGreater(sr._last_write_end, end_before)
+
     def test_sr_led_writes_defer_while_steps_execute(self):
         """
         LED bits (led_mask 0xFF00) are cosmetic: a write requested while the
