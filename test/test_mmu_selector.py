@@ -1146,14 +1146,16 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         self.assertAlmostEqual(axis.carriage, idler.idler_offsets[1], places=3)
         self.assertEqual(idler.get_filament_grip_state(), FILAMENT_DRIVE_STATE)
 
-    def test_release_swings_clear_by_default(self):
+    def test_release_to_away_swings_clear(self):
         """
-        Stock Prusa behaviour (the profile default idler_release_to_away=1): after a
-        grip, release swings the idler to the disengaged position so the extruder
-        pulls the filament freely instead of dragging the unpowered pulley.
+        Stock Prusa behaviour (idler_release_to_away=1): after a grip, release swings
+        the idler to the disengaged position so the extruder pulls the filament
+        freely instead of dragging the unpowered pulley. (Off by default until
+        shift register writes are kept clear of every motor's steps.)
         """
         idler, axis = self.idler(), self.idler_axis()
-        self.assertEqual(idler.p.idler_release_to_away, 1)
+        self.assertEqual(idler.p.idler_release_to_away, 0)     # profile default
+        self.hh.run_gcode('MMU_TEST_CONFIG UNIT=0 idler_release_to_away=1')
         self.hh.run_gcode('MMU_SELECT GATE=1')
         self.hh.mmu.mmu_unit(0).selector.filament_drive(buzz_gear=False)
         self.assertAlmostEqual(axis.carriage, idler.idler_offsets[1], places=3)
@@ -1168,6 +1170,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         the idler stayed at home.
         """
         idler, axis = self.idler(), self.idler_axis()
+        self.hh.run_gcode('MMU_TEST_CONFIG UNIT=0 idler_release_to_away=1')
         self.hh.run_gcode('MMU_SELECT GATE=2')        # ends released (disengaged)
         self.assertAlmostEqual(axis.carriage, idler.idler_offsets[5], places=3)
         self.hh.run_gcode('MMU_IDLER HOME=1')
