@@ -44,36 +44,40 @@ if MMU_TYPE_PRUSA_MMU3_3_0
     default "spi"
 
   # ------------------------------------------------------------------
-  # Defaults (gear/selector/idler motion hardware)
-  # Values are those tuned on the reference MMU3 (Freakazo's mk3s):
-  #   - selector/idler run in spreadCycle above ~3mm/s (stealthchop_threshold
-  #     3) so tmc2130 StallGuard works during homing while the motors sit
-  #     silently in stealthChop at standstill -- stealthChop disables stall
-  #     detection so the threshold must stay below the slowest homing
-  #     (selector second homing approach runs at 8/2=4mm/s)
-  #   - SGT: selector 15, idler 0
-  #   - gear freewheels when disabled (driver_FREEWHEEL 1)
-  # NOTE: rotation distances are calibration-dependent on the MMU3 and
-  # should be tuned for your unit with MMU_CALIBRATE_GEAR / selector
-  # calibration routines
+  # Defaults (gear/selector/idler motion hardware): stock Prusa MMU3
+  # firmware (prusa-firmware-mmu src/config/config.h). With a 0.220 sense
+  # resistor Klipper reproduces each stock TMC2130 register exactly:
+  #   pulley   iRun 13 / iHold 0 -> 0.23 / 0.01, 8 microsteps, 19.147mm
+  #   selector iRun 31 / iHold 0 -> 0.53 / 0.01, 8 microsteps, SGT 3
+  #   idler    iRun 31 / iHold 5 -> 0.53 / 0.10, 16 microsteps, SGT 7
+  #   all spreadCycle (.stealth = false); homing selector 30mm/s, idler
+  #   265deg/s = 29.4 units/s
+  # Movement speeds are NOT stock (see the gear/selector speed notes): the
+  # Klipper MCU's move queue on the ATmega32U4 can't take Prusa's 95mm/s.
+  # Rotation distances vary per unit: calibrate them.
   # ------------------------------------------------------------------
+
+  config PARAM_GEAR_SENSE_RESISTOR
+    default 0.220
+  config PARAM_SELECTOR_SENSE_RESISTOR
+    default 0.220
 
   config PARAM_GEAR_GEAR_RATIO
     default "1:1"
   config PARAM_GEAR_ROTATION_DISTANCE
-    default 19.394
+    default 19.147
   config PARAM_GEAR_RUN_CURRENT
-    default 0.5
+    default 0.23
   config PARAM_GEAR_HOLD_CURRENT
     default 0.01
   config PARAM_GEAR_MICROSTEPS
-    default 16
+    default 8
   config PARAM_GEAR_STEALTHCHOP
-    default 999999		# No gear stallguard homing on MMU3 -- always stealthChop
+    default 0		# Stock: always spreadCycle
   config PARAM_GEAR_STALLGUARD_THRESHOLD
-    default 0
+    default 8
   config PARAM_GEAR_FREEWHEEL
-    default 1
+    default 1		# Stock tmc2130_freewheel (only acts in stealthChop with IHOLD 0)
   config PARAM_GEAR_HOMING_SPEED
     default 30
 
@@ -82,35 +86,31 @@ if MMU_TYPE_PRUSA_MMU3_3_0
   config PARAM_SELECTOR_ROTATION_DISTANCE
     default 8
   config PARAM_SELECTOR_RUN_CURRENT
-    default 0.8
+    default 0.53
   config PARAM_SELECTOR_HOLD_CURRENT
-    default 0.3
+    default 0.01
   config PARAM_SELECTOR_MICROSTEPS
     default 8
   config PARAM_SELECTOR_STEALTHCHOP
-    default 3		# stealthChop below 3mm/s (quiet standstill); spreadCycle above so StallGuard homing works
+    default 0		# Stock: always spreadCycle (StallGuard needs it while homing)
   config PARAM_SELECTOR_STALLGUARD_THRESHOLD
-    default 15
+    default 3
   config PARAM_SELECTOR_ACCEL
     default 1200
   config PARAM_SELECTOR_HOMING_SPEED
-    default 8
+    default 30
     help
-      StallGuard only detects stalls at medium motor speeds. At 8mm/s and an
-      8mm rotation distance the selector runs ~60RPM -- well within range.
-      Faster speeds (60mm/s = ~450RPM) push the back-EMF too high and the
-      stall is never detected (verified on the live MMU3).
-      stealthchop_threshold must stay below the second homing approach speed
-      (homing_speed/2 = 4mm/s) or the approach runs in stealthChop and the
-      stall is never detected.
+      Stock selectorHomingFeedrate. StallGuard needs medium motor speed:
+      the stock SGT 3 is tuned for this speed, and much faster (60mm/s)
+      pushes the back-EMF too high for a stall to register.
 
   config PARAM_SELECTOR_MOVE_SPEED
     default 20
     help
-      Slow, quiet gate selection moves. The 200mm/s generic default is too
-      fast for the MMU3's ATmega32U4: the step command pressure combined
-      with the shift register bitbang burst overflowed the MCU move queue
-      ("Move queue overflow" -- verified on the live MMU3).
+      Not stock (45mm/s): Klipper streams every step to the ATmega32U4,
+      whose move queue overflowed on fast gate selection moves combined
+      with the shift register writes ("Move queue overflow", verified on
+      a live MMU3).
 
   # ------------------------------------------------------------------
   # Gear move speeds for the MMU3's ATmega32U4 (2.5KB RAM, ~115 move
@@ -152,29 +152,23 @@ if MMU_TYPE_PRUSA_MMU3_3_0
       Verified working at 40 on the live MMU3 (matches the original
       pre-port config value).
   config PARAM_IDLER_RUN_CURRENT
-    default 0.8
+    default 0.53
   config PARAM_IDLER_HOLD_CURRENT
-    default 0.1
+    default 0.10
   config PARAM_IDLER_MICROSTEPS
     default 16
     help
-      The pre-port config used 16 microsteps and the idler offsets
-      (mmu_idler_offsets) are in those units. At 8 the barrel travels
-      twice as far per commanded mm, so homing "found" the stop after a
-      fraction of the expected travel and the stored offsets would land
-      2x too far.
+      Stock idler mRes. The idler offsets are in units of 1/40 turn at
+      rotation_distance 40 (9 degrees each), matching Prusa's angles.
   config PARAM_IDLER_STEALTHCHOP
-    default 3		# stealthChop below 3mm/s (quiet standstill); spreadCycle above so StallGuard homing works
+    default 0		# Stock: always spreadCycle
   config PARAM_IDLER_SGT
-    default 10
+    default 7
     help
-      StallGuard2 threshold for the light idler barrel. The stock 60 (and
-      15) never trip at the stop, while 0 and below false-trigger on free
-      motion ("Homed" instantly with no travel). Tuned against the SOFT
-      silicone stop the idler parks at: 12 never trips on the compliant
-      stop, 8-6 false-trigger on the homing acceleration transient; 10
-      trips reliably at the silicone after full travel (verified on the
-      live MMU3).
+      Stock idler sg_thrs, tuned by Prusa for homing at 265deg/s against
+      the end Prusa firmware homes to (the same end as here).
+  config PARAM_IDLER_HOMING_SPEED
+    default 29.4		# Stock 265deg/s at 9deg per unit
 
   # MMU3 has no purge bucket/waste chute of its own -- the shipped standalone
   # purge macro just dumps filament in place wherever the toolhead happens to

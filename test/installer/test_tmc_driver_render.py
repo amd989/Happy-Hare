@@ -191,8 +191,8 @@ class TestIdlerSenseResistor(unittest.TestCase):
         return parsed.get('tmc2130 mmu_stepper unit0_idler', 'sense_resistor')
 
     def test_defaults_to_the_selector_value(self):
-        self.assertEqual(float(self._idler_sense({})), 0.110)
-        self.assertEqual(float(self._idler_sense({'PARAM_SELECTOR_SENSE_RESISTOR': '0.22'})), 0.22)
+        self.assertEqual(float(self._idler_sense({})), 0.220)       # MMU3 stock value
+        self.assertEqual(float(self._idler_sense({'PARAM_SELECTOR_SENSE_RESISTOR': '0.15'})), 0.15)
 
     def test_can_be_set_on_its_own(self):
         self.assertEqual(float(self._idler_sense({'PARAM_SELECTOR_SENSE_RESISTOR': '0.22',

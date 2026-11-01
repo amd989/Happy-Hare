@@ -668,30 +668,23 @@ class TestEveryBootableProfile(unittest.TestCase):
                 self.assertIn('driver_SGT', cfg.options('tmc2130 mmu_stepper unit0_%s' % name))
                 self.assertLessEqual(cfg.getint('tmc2130 mmu_stepper unit0_%s' % name, 'driver_SGT'), 63)
 
-        # StallGuard only works in spreadCycle: the selector and idler must not
-        # run stealthChop while homing or the stall is never detected. A small
-        # threshold (3mm/s) keeps the motors silent in stealthChop at standstill
-        # while all homing speeds (selector 8, idler 20mm/s) and the second
-        # homing approach (half the homing speed) stay in spreadCycle. This was
-        # the live failure -- "No trigger on mmu_stepper unit0_selector" with
-        # the default threshold of 100 while homing at 60 mm/s.
-        for name, expected in (('selector', 3.0), ('idler', 3.0)):
-            with self.subTest(stealthchop=name):
-                self.assertEqual(cfg.getfloat('tmc2130 mmu_stepper unit0_%s' % name, 'stealthchop_threshold'),
-                                 expected)
-        # The gear is the opposite: no stallguard homing on the MMU3, always
-        # stealthChop and freewheel when disabled (reference machine values).
-        self.assertEqual(cfg.getfloat('tmc2130 mmu_stepper unit0_gear', 'stealthchop_threshold'), 999999.0)
+        # Stock Prusa MMU3 firmware values (prusa-firmware-mmu config.h). With a
+        # 0.220 sense resistor each matches the stock TMC2130 register: pulley
+        # iRun 13 / iHold 0, selector iRun 31 / iHold 0, idler iRun 31 / iHold 5.
+        # All three run spreadCycle (.stealth = false), which StallGuard homing
+        # also needs; SGT is sg_thrs (pulley 8, selector 3, idler 7).
+        stock = {'gear':     (0.23, 0.01, 8),
+                 'selector': (0.53, 0.01, 3),
+                 'idler':    (0.53, 0.10, 7)}
+        for name, (run, hold, sgt) in stock.items():
+            section = 'tmc2130 mmu_stepper unit0_%s' % name
+            with self.subTest(stock=name):
+                self.assertEqual(cfg.getfloat(section, 'sense_resistor'), 0.220)
+                self.assertEqual(cfg.getfloat(section, 'run_current'), run)
+                self.assertEqual(cfg.getfloat(section, 'hold_current'), hold)
+                self.assertEqual(cfg.getfloat(section, 'stealthchop_threshold'), 0.0)
+                self.assertEqual(cfg.getint(section, 'driver_SGT'), sgt)
         self.assertEqual(cfg.getint('tmc2130 mmu_stepper unit0_gear', 'driver_FREEWHEEL'), 1)
-        self.assertEqual(cfg.getint('tmc2130 mmu_stepper unit0_selector', 'driver_SGT'), 15)
-        # The idler is a light rotating barrel; the stock 60 (and 15) never
-        # trips at the stop while 0 and below false-trigger on free motion,
-        # and 6 still false-triggers on the homing acceleration transient
-        # ("Homed" instantly with no travel). 14 never trips either; 10-12
-        # trip exactly at the stop after full travel -- the live failure was
-        # "No trigger on mmu_stepper unit0_idler after full movement" with
-        # SGT 60/15 and instant false "homes" with SGT <= 6.
-        self.assertEqual(cfg.getint('tmc2130 mmu_stepper unit0_idler', 'driver_SGT'), 10)
 
         # The SHR16 shift register chip must be registered as a pin provider
         ppins = hh.printer.lookup_object('pins')
