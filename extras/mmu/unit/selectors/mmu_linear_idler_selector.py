@@ -346,6 +346,10 @@ class LinearSelectorIdler:
             try:
                 self.idler_stepper.do_home_rail()
                 self.is_homed = True
+                # Homing moved the barrel to 0: forget the gate it was at, or the
+                # next move to that gate (often the disengaged position) is skipped
+                # as "already there" and the idler stays at home
+                self.reinit()
                 self.mmu.log_info("Homed MMU Idler...")
             except Exception as e:  # Homing failed
                 raise MmuError("Homing idler failed. Klipper reports: %s" % str(e))

@@ -1127,6 +1127,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
             with self.subTest(gate=gate):
                 self.hh.run_gcode('MMU_SELECT GATE=%d' % gate)
                 self.assertEqual(self.hh.mmu.gate_selected, gate)
+                self.hh.mmu.mmu_unit(0).selector.filament_drive(buzz_gear=False)
                 self.assertAlmostEqual(axis.carriage, idler.idler_offsets[gate],
                                        places=3)
                 self.assertEqual(idler.get_filament_grip_state(), FILAMENT_DRIVE_STATE)
@@ -1134,14 +1135,45 @@ class TestPrusaIdlerSelector(SelectorTestCase):
 
     def test_release_pre_positions_at_the_selected_gate(self):
         """
-        MMU3 semantics: release pre-positions the idler at the selected gate so the
-        gear can drive filament immediately. Only selector movement disengages.
+        idler_release_to_away=0: release pre-positions the idler at the selected
+        gate so the gear can drive filament immediately. Only selector movement
+        disengages.
         """
         idler, axis = self.idler(), self.idler_axis()
+        self.hh.run_gcode('MMU_TEST_CONFIG UNIT=0 idler_release_to_away=0')
         self.hh.run_gcode('MMU_SELECT GATE=1')
         self.hh.mmu.mmu_unit(0).selector.filament_release()
         self.assertAlmostEqual(axis.carriage, idler.idler_offsets[1], places=3)
         self.assertEqual(idler.get_filament_grip_state(), FILAMENT_DRIVE_STATE)
+
+    def test_release_swings_clear_by_default(self):
+        """
+        Stock Prusa behaviour (the profile default idler_release_to_away=1): after a
+        grip, release swings the idler to the disengaged position so the extruder
+        pulls the filament freely instead of dragging the unpowered pulley.
+        """
+        idler, axis = self.idler(), self.idler_axis()
+        self.assertEqual(idler.p.idler_release_to_away, 1)
+        self.hh.run_gcode('MMU_SELECT GATE=1')
+        self.hh.mmu.mmu_unit(0).selector.filament_drive(buzz_gear=False)
+        self.assertAlmostEqual(axis.carriage, idler.idler_offsets[1], places=3)
+        self.hh.mmu.mmu_unit(0).selector.filament_release()
+        self.assertAlmostEqual(axis.carriage, idler.idler_offsets[5], places=3)
+        self.assertEqual(idler.get_filament_grip_state(), FILAMENT_RELEASE_STATE)
+
+    def test_homing_forgets_the_previous_idler_position(self):
+        """
+        Homing moves the barrel to 0. If the idler still believed it was at the
+        disengaged position, the next release was skipped as "already there" and
+        the idler stayed at home.
+        """
+        idler, axis = self.idler(), self.idler_axis()
+        self.hh.run_gcode('MMU_SELECT GATE=2')        # ends released (disengaged)
+        self.assertAlmostEqual(axis.carriage, idler.idler_offsets[5], places=3)
+        self.hh.run_gcode('MMU_IDLER HOME=1')
+        self.hh.mmu.mmu_unit(0).selector.filament_release()
+        self.assertAlmostEqual(axis.carriage, idler.idler_offsets[5], places=3)
+        self.assertEqual(self.hh.errors, [])
 
     def test_hold_move_disengages_before_selector_movement(self):
         """filament_hold_move() (called before every selector move) parks the idler."""
@@ -1276,6 +1308,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         self.assertEqual(vpin._bit_num, 4)   # Idler DIR is SR bit 4
         self.assertEqual(vpin._invert, 1)    # config says !mmu_sr:4
 
+        idler._set_idler_to_gate(0)   # start from a known position (gate 0 is at 0)
         idler._set_idler_to_gate(2)   # forward, dir 0 -> physical 1
         self.assertEqual((sr.state >> 4) & 1, 1)
         idler._set_idler_to_gate(0)   # backward, dir 1 -> physical 0
