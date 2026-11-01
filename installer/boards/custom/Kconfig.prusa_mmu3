@@ -53,7 +53,10 @@ if BOARD_TYPE_PRUSA_MMU3_1_0
   config PIN_SELECTOR_DIR
     default "$(MCU_NAME):PF2"   # Dummy -- real DIR is on the shift register
   config PIN_SELECTOR_DIR_SR
-    default "mmu_sr:2"
+    default "!mmu_sr:2"  # Inverted so the selector homes against the left side of
+                         # the body, at slot 1, like Prusa's firmware. Gate 0 is
+                         # then the slot labelled 1 (not inverted, it homed at the
+                         # motor end and gate 0 was label 5)
   config PIN_SELECTOR_ENABLE
     default "!mmu_sr:3"
   config PIN_SELECTOR_DIAG

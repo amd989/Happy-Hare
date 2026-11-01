@@ -117,25 +117,25 @@ class LinearSelectorParameters(TunableParametersBase):
             })
 
         elif vendor == VENDOR_PRUSA.lower():
-            # Measured on the live MMU3 (Freakazo's mk3s): the selector homes
-            # at the right endstop and the first real gate (Prusa slot 5) sits
-            # ~18mm from home -- the position ~4mm from home is the "skip"
-            # (park) position used by Prusa firmware, not a filament gate.
-            # Five gates span 18..74mm with ~14mm pitch (the CAD 20mm pitch
-            # overestimates); total travel to the hard stop is ~76mm.
+            # The selector homes against the left side of the body, like Prusa
+            # firmware (prusa-firmware-mmu config.h: selector.dirOn, "home at
+            # max"), so gate N is the slot labelled N+1 on the front. Slots sit
+            # 1mm + N*14mm from home (selectorSlotPositions); the far hard stop
+            # is ~75.5mm away, past the "skip" (park) position by the motor.
             cad.update({
-                'cad_gate0_pos': 18.0,      # Distance from endstop to first real gate (Prusa slot 5)
-                'cad_gate_width': 14.0,     # MMU3 gate pitch (measured)
+                'cad_gate0_pos': 1.0,       # Distance from endstop to gate 0 (slot 1)
+                'cad_gate_width': 14.0,     # MMU3 gate pitch (SelectorSlotDistance)
                 'cad_bypass_offset': 0.0,   # MMU3 has no bypass
-                'cad_last_gate_offset': 2.0,# Has hard stop at limit of travel
+                'cad_last_gate_offset': 18.5,# Last gate (57mm) to the far hard stop (~75.5mm)
                 # Idler barrel positions (units of motor travel at rd=40,
                 # 1 unit = 9deg) from the homed silicone stop. Derived from
                 # Prusa's factory geometry (prusa-firmware-mmu config.h:
                 # slots 58-218deg at 40deg pitch from the far endstop, idle
-                # 18deg from it, measured ~225deg stop-to-stop): gate 0 is
-                # the right-most lane (Prusa slot 5), gate 4 the left-most.
-                # Verified lane-by-lane on the live MMU3.
-                'cad_idler_offsets': [19.7, 15.3, 10.9, 6.4, 2.0, 23.5],
+                # 18deg from it, measured ~225deg stop-to-stop), ordered to
+                # match the selector: gate 0 is the left-most lane (slot 1),
+                # gate 4 the right-most (slot 5), last entry the idle position.
+                # Positions vary by about a slot between units: calibrate them.
+                'cad_idler_offsets': [2.0, 6.4, 10.9, 15.3, 19.7, 23.5],
             })
 
         return cad

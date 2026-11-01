@@ -1098,13 +1098,13 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         gate positions, not an unusable [-1...] list. The vendor defaults are
         Prusa's factory idler geometry (prusa-firmware-mmu config.h: slots at
         58-218deg, 40deg pitch, idle 18deg from the far endstop) converted to
-        rotation_distance 40 units, with gate 0 = the right-most lane.
+        rotation_distance 40 units, with gate 0 = the left-most lane (slot 1).
         """
         hh = session(self.PROFILE)
         hh.boot()                                   # no calibrate -> no seeding
         selector = {u.name: u for u in hh.mmu.mmu_machine.units}['unit0'].selector
         self.assertEqual(selector.idler.idler_offsets,
-                         [19.7, 15.3, 10.9, 6.4, 2.0, 23.5])
+                         [2.0, 6.4, 10.9, 15.3, 19.7, 23.5])
         from extras.mmu.unit.mmu_calibrator import CALIBRATED_SELECTOR
         self.assertTrue(selector.calibrator.check_calibrated(CALIBRATED_SELECTOR))
 
