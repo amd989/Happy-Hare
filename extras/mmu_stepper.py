@@ -599,6 +599,11 @@ class MmuStepper(ExtruderStepper):
         if dir_sr_pin:
             ppins = self.printer.lookup_object('pins')
             self._dir_sr_pin = ppins.setup_pin('digital_out', dir_sr_pin)
+        # Shift registers on this stepper's MCU (found at connect). Their writes
+        # wait for this stepper's steps and its moves wait for their writes.
+        self._shift_registers = []
+        self._steps_end = 0. # print_time of the last scheduled step of a manual move
+        self.printer.register_event_handler('klippy:connect', self._register_with_shift_registers)
 
         if force_rail or self.has_default_endstop or self.has_extra_endstops:
             self.can_home = self.has_default_endstop
@@ -1008,56 +1013,99 @@ class MmuStepper(ExtruderStepper):
             self.commanded_pos = setpos
 
 
+    def _register_with_shift_registers(self):
+        """
+        Register this stepper with every shift register on its MCU (Prusa MMU3
+        SHR16), so their writes are scheduled after this stepper's steps.
+        """
+        srs = []
+        if self._dir_sr_pin is not None and hasattr(self._dir_sr_pin, '_sr'):
+            srs.append(self._dir_sr_pin._sr)
+        mcus = [s.get_mcu() for s in self.steppers]
+        ppins = self.printer.lookup_object('pins')
+        for chip in getattr(ppins, 'chips', {}).values():
+            if (hasattr(chip, 'register_motion_source') and chip not in srs
+                    and any(chip.mcu is m for m in mcus)):
+                srs.append(chip)
+        for sr in srs:
+            sr.register_motion_source(self.get_steps_end)
+        self._shift_registers = srs
+
+
+    def get_steps_end(self):
+        """
+        print_time the last scheduled step of this stepper lands. In extruder
+        mode the steps follow the toolhead, so its queued print time counts.
+        """
+        end = self._steps_end
+        if self.motion_mode == self.MODE_EXTRUDER:
+            toolhead = self.printer.lookup_object('toolhead', None)
+            end = max(end, getattr(toolhead, 'print_time', end))
+        return end
+
+
+    def _note_steps_end(self, end_time):
+        self._steps_end = max(self._steps_end, end_time)
+        for follower in self._manual_followers:
+            follower._steps_end = max(follower._steps_end, end_time)
+
+
     def _pre_set_dir_pin(self, dist, positive_dir=None, move_time=None):
         """
-        Pre-set a virtual (shift register) DIR bit before a move (Prusa MMU3).
+        Get the shift register ready for a move (Prusa MMU3) and return how long
+        the move must be delayed so its first step lands after every shift
+        register write.
 
         The stepper's `dir_pin` is a dummy GPIO -- the real direction lives on a
         bit of the SHR16 shift register (config option `dir_sr_pin`) that only
         exists in Python (ShiftRegisterBit) and can never be driven by the MCU
-        firmware. It must therefore be written before the move starts; the
-        firmware-side dir pin is a no-op placeholder in this setup.
+        firmware. It must therefore be written before the move starts. A
+        disabled motor is enabled here too, so its ENABLE bit goes out before
+        the move rather than from Klipper's auto-enable once steps are generated.
 
-        Returns the extra time the move must be delayed so its first step lands
-        after the shift register write completes. The bitbang is 50 timed MCU
-        commands (~25ms) and USB CDC latency on the ATmega32U4 means a short
-        lead pushes commands past their schedule, shutting the MCU down
-        ("Rescheduled timer in the past") -- so the write gets the same
-        generous lead the boot-time writes use, and the move waits for it.
+        A bitbang is 50 timed MCU commands (~25ms) that monopolize the AVR timer:
+        no motor on the MCU may step through one. The shift register schedules
+        writes after every motor's steps, and every move -- even one with no
+        write of its own -- starts after any pending or in-flight write.
 
         `positive_dir` overrides the sign of `dist` for homing where the
         drip move target may not reflect the first approach direction.
         """
-        if dist == 0:
+        if dist == 0 or not self._shift_registers:
             return 0.
-        vpin = self._dir_sr_pin
-        if vpin is None:
-            return 0.
-        new_dir = 0 if (positive_dir if positive_dir is not None else dist > 0) else 1
-        if new_dir == self._dir_sr_last:
-            return 0. # Direction unchanged -- nothing to write, no delay
-        # Pass new_dir directly -- ShiftRegisterBit.set_digital() already
-        # applies the pin's invert flag internally, so do NOT XOR with the
-        # stepper's dir_inverted flag or the inversion cancels out.
-        mcu = vpin.get_mcu()
+        mcu = self._shift_registers[0].mcu
         curtime = self.printer.get_reactor().monotonic()
         now_pt = mcu.estimated_print_time(curtime)
         base = move_time if move_time is not None else now_pt
-        # Schedule the bitbang strictly AFTER the previous move's steps. The
-        # ~25ms, 50-event write monopolizes the AVR timer; if it overlaps step
-        # execution the ISR contention stalls steps and backs up the MCU move
-        # queue ("Move queue overflow" -- verified on the live MMU3 with 2-3
-        # writes piled up around a gear move). Scheduling past `base` (the end
-        # of the previous move) plus the deferred-start margin below lands the
-        # write in the quiet window between moves.
+        # Lead for the write (USB CDC latency) and a gap after the previous
+        # move's steps; the shift register also waits for other motors' steps.
         sched_time = max(now_pt + 0.100, base + 0.005)
-        actual_time = vpin.set_digital(sched_time, new_dir)
-        self._dir_sr_last = new_dir
-        # Bitbang ends ~25ms after its actual (possibly deferred) start;
-        # add a margin for the pacing. Using the deferred start keeps the
-        # move from overlapping another stepper's in-flight SR write.
-        write_end = actual_time + 0.035
-        return max(0., write_end - base)
+        self._enable_before_move(sched_time)
+        vpin = self._dir_sr_pin
+        if vpin is not None:
+            new_dir = 0 if (positive_dir if positive_dir is not None else dist > 0) else 1
+            if new_dir != self._dir_sr_last:
+                # Pass new_dir directly -- ShiftRegisterBit.set_digital() already
+                # applies the pin's invert flag internally, so do NOT XOR with the
+                # stepper's dir_inverted flag or the inversion cancels out.
+                vpin.set_digital(sched_time, new_dir)
+                self._dir_sr_last = new_dir
+        # Start after every pending/in-flight write, with a margin for pacing
+        writes_end = max(sr.get_writes_end() for sr in self._shift_registers)
+        return max(0., writes_end + 0.010 - base)
+
+
+    def _enable_before_move(self, print_time):
+        stepper_enable = self.printer.lookup_object('stepper_enable', None)
+        if stepper_enable is None:
+            return
+        for stepper in self.steppers:
+            try:
+                el = stepper_enable.lookup_enable(stepper.get_name())
+            except Exception:
+                continue
+            if not el.is_motor_enabled():
+                el.motor_enable(print_time)
 
 
     def _submit_move(self, movetime, movepos, speed, accel):
@@ -1069,7 +1117,9 @@ class MmuStepper(ExtruderStepper):
         self.trapq_append(self.manual_trapq, movetime, accel_t, cruise_t, accel_t,
                           cp, 0., 0., axis_r, 0., 0., 0., cruise_v, accel)
         self.commanded_pos = movepos
-        return movetime + accel_t + cruise_t + accel_t
+        end_time = movetime + accel_t + cruise_t + accel_t
+        self._note_steps_end(end_time)
+        return end_time
 
 
     def do_move(self, movepos, speed, accel, sync=True):
@@ -1249,6 +1299,7 @@ class MmuStepper(ExtruderStepper):
         # Submit move to trapq
         self.sync_print_time()
         start_time = self.next_cmd_time
+        steps_end = self._steps_end
         end_time = self._submit_move(start_time, newpos[0],
                                      speed, self.homing_accel)
         # Drip updates to motors
@@ -1256,6 +1307,15 @@ class MmuStepper(ExtruderStepper):
                                              drip_completion)
         # Clear trapq of any remaining parts of movement
         self.motion_queuing.wipe_trapq(self.trapq)
+        test = getattr(drip_completion, 'test', None)
+        if test is not None and test():
+            # An endstop stopped the steps on the MCU: they ended by now, not at
+            # the planned end, so shift register writes need not wait for it
+            mcu = self.stepper.get_mcu()
+            now_pt = mcu.estimated_print_time(self.printer.get_reactor().monotonic())
+            self._steps_end = max(steps_end, min(end_time, now_pt))
+            for follower in self._manual_followers:
+                follower._steps_end = self._steps_end
 
 
     def get_kinematics(self):

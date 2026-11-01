@@ -1087,6 +1087,30 @@ class TestPrusaIdlerSelector(SelectorTestCase):
                 return axis
         self.fail('no idler axis published for prusa_mmu3')
 
+    def quiet_shift_register(self):
+        """
+        Return (sr, reactor, now_pt) with no write pending or in flight and every
+        motor on the MMU MCU idle as of now. The harness print clock is offset
+        negative and never advances during moves, so homing leaves writes and
+        step horizons behind -- the RELATIVE times are what the tests check.
+        """
+        sr = self.hh.printer.lookup_object('shift_register mmu_sr')
+        reactor = self.hh.printer.get_reactor()
+        now_pt = sr.mcu.estimated_print_time(reactor.monotonic())
+        sr._pending_write_start = None
+        sr._last_write_end = now_pt
+        for get_steps_end in sr._motion_sources:
+            stepper = get_steps_end.__self__
+            stepper._steps_end = stepper.next_cmd_time = now_pt
+        return sr, reactor, now_pt
+
+    def sr_stepper(self, sr, dir_bit):
+        for get_steps_end in sr._motion_sources:
+            stepper = get_steps_end.__self__
+            if getattr(stepper._dir_sr_pin, '_bit_num', None) == dir_bit:
+                return stepper
+        self.fail('no stepper with its DIR on SR bit %d' % dir_bit)
+
     def test_homing_homes_both_selector_and_idler(self):
         selector = self.selector('unit0')
         self.assertTrue(selector.is_homed)
@@ -1150,12 +1174,10 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         """
         Stock Prusa behaviour (idler_release_to_away=1): after a grip, release swings
         the idler to the disengaged position so the extruder pulls the filament
-        freely instead of dragging the unpowered pulley. (Off by default until
-        shift register writes are kept clear of every motor's steps.)
+        freely instead of dragging the unpowered pulley.
         """
         idler, axis = self.idler(), self.idler_axis()
-        self.assertEqual(idler.p.idler_release_to_away, 0)     # profile default
-        self.hh.run_gcode('MMU_TEST_CONFIG UNIT=0 idler_release_to_away=1')
+        self.assertEqual(idler.p.idler_release_to_away, 1)     # profile default
         self.hh.run_gcode('MMU_SELECT GATE=1')
         self.hh.mmu.mmu_unit(0).selector.filament_drive(buzz_gear=False)
         self.assertAlmostEqual(axis.carriage, idler.idler_offsets[1], places=3)
@@ -1194,16 +1216,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         piling up around a gear move overflowed the MMU3 AVR's move queue
         ("Move queue overflow" -- the live failure this package fixes).
         """
-        sr = self.hh.printer.lookup_object('shift_register mmu_sr')
-        reactor = self.hh.printer.get_reactor()
-        mcu = sr.mcu
-        now_pt = mcu.estimated_print_time(reactor.monotonic())
-
-        # Normalize: flush any pending write left by homing and anchor the
-        # in-flight end at the current print position (the harness clock is
-        # offset negative; the RELATIVE times are what matter).
-        sr._pending_write_start = None
-        sr._last_write_end = now_pt
+        sr, reactor, now_pt = self.quiet_shift_register()
 
         # First change schedules a pending write well in the future (not yet
         # generated).
@@ -1260,15 +1273,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         toolhead has steps queued past the MCU's actual position is pushed to
         ~150ms past the execution horizon instead of bitbanging mid-move.
         """
-        sr = self.hh.printer.lookup_object('shift_register mmu_sr')
-        reactor = self.hh.printer.get_reactor()
-        mcu = sr.mcu
-        now_pt = mcu.estimated_print_time(reactor.monotonic())
-
-        # Normalize (see coalescing test): the harness clock is offset
-        # negative, so anchor the in-flight end at the current position.
-        sr._pending_write_start = None
-        sr._last_write_end = now_pt
+        sr, reactor, now_pt = self.quiet_shift_register()
 
         toolhead = self.hh.printer.lookup_object('toolhead')
         setattr(toolhead, 'print_time', now_pt + 1.0)   # simulate busy
@@ -1278,6 +1283,47 @@ class TestPrusaIdlerSelector(SelectorTestCase):
             self.assertEqual((sr.state >> 8) & 1, 1)
         finally:
             delattr(toolhead, 'print_time')
+
+    def test_sr_writes_wait_for_every_motor_on_the_mcu(self):
+        """
+        Live MMU3 failure: at the end of a load the idler's release move was still
+        stepping when another motor's shift register write (~25ms bitbang) was
+        scheduled, and the board shut down ("Timer too close"). A write must land
+        after the last step of EVERY motor on the MCU, and the move that needs it
+        waits for it. A move with no write of its own must also wait for a pending one.
+        """
+        sr, reactor, now_pt = self.quiet_shift_register()
+        idler = self.sr_stepper(sr, 4)          # idler DIR is SR bit 4
+        selector = self.sr_stepper(sr, 2)       # selector DIR is SR bit 2
+
+        # The idler swings across the barrel, its steps running well past the
+        # next ~25ms bitbang slot
+        target = max(self.idler().idler_offsets, key=lambda o: abs(o - idler.commanded_pos))
+        dist = target - idler.commanded_pos
+        self.assertNotEqual(dist, 0.)
+        idler_end = idler._submit_move(now_pt + 0.2, target, 10., 100.)
+        self.assertGreater(idler_end, now_pt + 0.5)
+        idler_start = idler.manual_trapq.moves[-1]['print_time']
+        if sr._pending_write_start is not None:     # the idler's own DIR write goes first
+            sr._fire_pending_write(reactor.monotonic())
+        self.assertLessEqual(sr.get_writes_end(), idler_start)
+
+        # The selector needs a DIR write for its next move while the idler is moving
+        selector._dir_sr_last = None
+        sel_base = now_pt + 0.1
+        sel_delay = selector._pre_set_dir_pin(5., move_time=sel_base)
+        write_start = sr._pending_write_start
+        self.assertIsNotNone(write_start)
+        self.assertGreaterEqual(write_start, idler_end, 'write landed mid idler move')
+        write_end = sr.get_writes_end()
+        self.assertGreaterEqual(sel_base + sel_delay, write_end,
+                                'selector move would step through its own write')
+
+        # Another idler move in the same direction (no write of its own) still
+        # waits for the selector's pending write
+        idler_delay = idler._pre_set_dir_pin(dist, move_time=idler_end)
+        self.assertGreaterEqual(idler_end + idler_delay, write_end,
+                                'idler move would step through the pending write')
 
 
     def test_drive_after_home_moves_to_the_gate(self):

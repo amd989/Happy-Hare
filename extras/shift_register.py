@@ -54,6 +54,9 @@ import pins
 _HIGH = 0x80000000
 _LOW  = 0
 
+# Gap between the last step of any motor on the MCU and the start of a bitbang
+_STEP_CLEARANCE = 0.005
+
 
 class _RawDigitalOut:
     """
@@ -255,6 +258,12 @@ class ShiftRegister:
         # these may be deferred while steps are executing, since the ~25ms
         # bitbang would otherwise stall step execution on the AVR timer.
         self.led_mask = int(config.get('led_mask', '0'), 0)
+        # Callables returning the print_time of the last scheduled step of each
+        # motor on this MCU (see register_motion_source). A bitbang is never
+        # scheduled before all of them: it monopolizes the AVR timer for ~25ms
+        # and another motor stepping through it shut the MMU3 down ("Timer too
+        # close" -- the idler's release move at the end of a load).
+        self._motion_sources = []
 
         # Optional software-SPI transport. If `miso_pin` is set, the register
         # state is shifted out via `spi_send` (zero move nodes, ~tens of µs)
@@ -362,6 +371,46 @@ class ShiftRegister:
         invert = pin_params['invert']
         return ShiftRegisterBit(self, bit_num, invert)
 
+    # -- Motion awareness ------------------------------------------------------
+
+    def register_motion_source(self, get_steps_end):
+        """Register a motor on this MCU.
+
+        `get_steps_end()` returns the print_time its last scheduled step lands.
+        Writes are scheduled after every registered motor's steps, and motors
+        call get_writes_end() so their moves start after pending writes.
+        """
+        if get_steps_end not in self._motion_sources:
+            self._motion_sources.append(get_steps_end)
+
+    def get_steps_end(self):
+        """print_time the last scheduled step of any registered motor lands."""
+        end = float('-inf') # No motors: nothing to wait for
+        for get_steps_end in self._motion_sources:
+            end = max(end, get_steps_end())
+        return end
+
+    def _write_duration(self):
+        if self._use_spi:
+            return 0.001
+        dt = 8000.0 / self.mcu.seconds_to_clock(1.0)
+        return dt * (self.num_bits * 3 + 3)
+
+    def get_writes_end(self):
+        """print_time by which every pending or in-flight write has finished.
+
+        A move on this MCU must not start before this, or its steps run through
+        a bitbang.
+        """
+        end = self._last_write_end
+        if self._pending_write_start is not None:
+            end = max(end, self._pending_write_start + self._write_duration())
+        if not self._initial_write_done and self._initial_write_time is not None:
+            # Changes ride along with the deferred initial write
+            initial = self.mcu.estimated_print_time(self._initial_write_time + 0.100)
+            end = max(end, initial + self._write_duration())
+        return end
+
     # -- Internal state management -------------------------------------------
 
     def _set_bit(self, bit_num, value):
@@ -400,6 +449,14 @@ class ShiftRegister:
         min_time = self.mcu.estimated_print_time(curtime + 0.100)
         if print_time < min_time:
             print_time = min_time
+        if not self._use_spi:
+            # Never bitbang while ANY motor on this MCU is stepping, not just
+            # the one that asked. A move that needs this write waits for it
+            # (get_writes_end), so it still goes out before that move.
+            # (The software-SPI shift-out is ~tens of µs and needs no gap.)
+            quiet = self.get_steps_end() + _STEP_CLEARANCE
+            if print_time < quiet:
+                print_time = quiet
         return self._request_write(print_time, bit_num)
 
     def _request_write(self, print_time, bit_num):
@@ -529,7 +586,7 @@ class ShiftRegister:
         # Publish the end time BEFORE generating: a request arriving while the
         # commands are being sent must see this write as in-flight, or it would
         # schedule an overlapping bitbang.
-        self._last_write_end = t + dt * (self.num_bits * 3 + 3)
+        self._last_write_end = t + self._write_duration()
 
         # Shift out MSB first (bit num_bits-1 down to bit 0).
         for i in range(self.num_bits - 1, -1, -1):

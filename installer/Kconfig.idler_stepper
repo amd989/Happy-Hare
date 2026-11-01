@@ -102,14 +102,12 @@ if MMU_HAS_IDLER
 
     config PARAM_IDLER_RELEASE_TO_AWAY
       int "Idler releases fully (0/1)     "
-      default 0
+      default 1
       range 0 1
       help
         1 = after a load the idler swings clear to its idle position, like
         stock Prusa firmware. 0 = it stays at the loaded gate (the extruder
-        drags the unpowered pulley). Default 0 for now: on the MMU3 the
-        release move can overlap a shift register write and shut the board
-        down ("Timer too close").
+        drags the unpowered pulley).
 
     config PARAM_IDLER_HOMING_SPEED
       float "Idler homing speed             "

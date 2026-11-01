@@ -1,6 +1,6 @@
 ---
 name: mmu3-avr-subsystem
-description: Explains the Prusa MMU3's ATmega32U4 (2.5KB RAM, USB CDC) constraints that shape this fork's movement and shift-register code — the ~115-node MCU move-queue budget and why gear speed/accel defaults are 25mm/s @ accel 800 (accel-phase step budget v^2/2a), the SHR16 shift-register bitbang architecture and the write-coalescing / real-time gating / move-aware DIR / LED-deferral design in shift_register.py, and the USB CDC timing hazards (clock-sync convergence, the 30s delayed SR init, minclock=0 burst strategy, 500us command spacing). Use this whenever touching extras/shift_register.py, mmu_stepper.py's _pre_set_dir_pin / dir_sr_pin, gear/idler/selector speed or acceleration defaults in installer/mmu_types/Kconfig.prusa, the MMU3 board Kconfig, or debugging "Move queue overflow", "Rescheduled timer in the past", or "Timer too close" on unit0 — even for something as simple as "why is the gear so slow" or "the MMU3 shut down mid-move".
+description: Explains the Prusa MMU3's ATmega32U4 (2.5KB RAM, USB CDC) constraints that shape this fork's movement and shift-register code — the ~115-node MCU move-queue budget and why gear speed/accel defaults are 25mm/s @ accel 800 (accel-phase step budget v^2/2a), the SHR16 shift-register bitbang architecture and the write-coalescing / real-time gating / all-motor gating / LED-deferral design in shift_register.py, and the USB CDC timing hazards (clock-sync convergence, the 30s delayed SR init, minclock=0 burst strategy, 500us command spacing). Use this whenever touching extras/shift_register.py, mmu_stepper.py's _pre_set_dir_pin / dir_sr_pin, gear/idler/selector speed or acceleration defaults in installer/mmu_types/Kconfig.prusa, the MMU3 board Kconfig, or debugging "Move queue overflow", "Rescheduled timer in the past", or "Timer too close" on unit0 — even for something as simple as "why is the gear so slow" or "the MMU3 shut down mid-move".
 ---
 
 # Prusa MMU3 AVR subsystem (ATmega32U4 + SHR16)
@@ -23,7 +23,7 @@ machine); see the references for the full derivations:
   model, why speed (not acceleration) used to overflow, the `v^2/2a` rule, and
   how the shipped defaults were derived.
 - `references/sr-bitbang-and-usb-cdc-timing.md` — the bitbang protocol, the
-  four-layer write-storm fix (coalescing, real-time gating, move-aware DIR
+  four-layer write-storm fix (coalescing, real-time gating, all-motor
   scheduling, LED deferral), and the USB CDC clock-sync/timing hazards.
 
 ## Board and hardware facts
@@ -88,22 +88,32 @@ machine); see the references for the full derivations:
      DIR flips + LED frames collapses to 1-2 bitbangs.
   2. **Real-time gating**: a new write behind an in-flight one schedules
      after `_last_write_end` instead of overlapping.
-  3. **Move-aware DIR** (`_pre_set_dir_pin`): the bitbang is scheduled at
-     `max(now_pt + 0.100, prev_move_end + 0.005)` — strictly after the
-     previous move's steps — and the move is delayed past `write_end`
-     (returned start + 0.035) so the first step lands after the bitbang.
+  3. **All-motor gating**: every `MmuStepper` registers with the SR on its
+     MCU (`register_motion_source(get_steps_end)`, at `klippy:connect`). A
+     bitbang is never scheduled before the last step of ANY of them
+     (`_set_bit_at_time` → `get_steps_end() + 0.005`), and `_pre_set_dir_pin`
+     delays EVERY move (DIR change or not) until `get_writes_end() + 0.010`,
+     so a write that move needs (DIR, or ENABLE — a disabled motor is enabled
+     there, not by step-time auto-enable) still goes out first. Before this,
+     writes only cleared the requesting motor's moves: the idler's release
+     move stepped through another motor's write ("Timer too close").
+     `_steps_end` comes from `_submit_move`; a homing drip cut short by an
+     endstop trims it to "now". Extruder-mode steppers count the toolhead's
+     `print_time`.
   4. **LED deferral**: bits in `led_mask` (config, `0xFF00` on MMU3) are
      cosmetic — while the toolhead is ahead of the MCU their writes are
-     pushed to `est + 0.150`.
+     pushed to `est + 0.150` (and past every motor's steps, per layer 3).
 - `_set_bit_at_time` returns the *actual* scheduled start (post-merge /
-  post-deferral) — `_pre_set_dir_pin` depends on that contract for its move
-  delay. Keep it when extending.
+  post-deferral); `get_writes_end()` covers pending, in-flight and the
+  deferred initial write. Moves must wait on `get_writes_end()`.
 - The harness instantiates the real `shift_register` module; tests live in
   `test/test_mmu_selector.py` (`TestPrusaIdlerSelector`): SR state checks,
   `test_sr_writes_coalesce_into_a_single_pending_bitbang`,
-  `test_sr_led_writes_defer_while_steps_execute`. NOTE: the harness print
-  clock is offset negative — normalize `_last_write_end`/pending state
-  before asserting timing (see those tests).
+  `test_sr_led_writes_defer_while_steps_execute`,
+  `test_sr_writes_wait_for_every_motor_on_the_mcu`. NOTE: the harness print
+  clock is offset negative and never advances during moves — use
+  `quiet_shift_register()` (resets pending/in-flight writes and every
+  motor's `_steps_end`) before asserting timing.
 
 ## USB CDC timing hazards
 

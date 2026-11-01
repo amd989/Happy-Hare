@@ -55,21 +55,25 @@ A DIR-flip storm + LED frames collapse to 1-2 bitbangs.
 The in-flight branch above never overlaps bitbangs; generation happens no
 earlier than ~50ms before the scheduled start.
 
-### 3. Move-aware DIR scheduling (no bitbang during steps)
+### 3. All-motor gating (no bitbang during ANY motor's steps)
 
-`_pre_set_dir_pin` (mmu_stepper.py):
+Every `MmuStepper` registers with the SR on its MCU at `klippy:connect`
+(`register_motion_source(self.get_steps_end)`; `_steps_end` is the end of its
+last `_submit_move`, trimmed to "now" after a homing drip an endstop cut
+short; extruder-mode steppers also count `toolhead.print_time`).
 
-```python
-base = move_time if move_time is not None else now_pt
-sched_time = max(now_pt + 0.100, base + 0.005)   # after previous move's steps
-actual_time = vpin.set_digital(sched_time, new_dir)
-write_end = actual_time + 0.035
-return max(0., write_end - base)                  # move delayed past write
-```
+- `_set_bit_at_time` schedules a bitbang no earlier than
+  `sr.get_steps_end() + 0.005` — after the last step of EVERY motor on the
+  MCU, not just the one asking.
+- `_pre_set_dir_pin` (mmu_stepper.py) enables a disabled motor, writes a
+  changed DIR at `max(now_pt + 0.100, base + 0.005)`, then delays the move
+  (DIR change or not) to `sr.get_writes_end() + 0.010`. `get_writes_end()`
+  covers the pending write, the in-flight one and the deferred initial write.
 
-The move's first step lands ~40ms after the previous move ended — after the
-25ms bitbang. `_set_bit_at_time` returns the *actual* scheduled start (after
-merge/defer), which is what makes this delay correct. Keep that contract.
+Originally only the requesting motor's previous move was cleared: at the end
+of a load the idler's release move (no DIR change, so no wait) stepped through
+another motor's write and the 32u4 shut down with "Timer too close". The
+stopgap `idler_release_to_away: 0` was reverted once this landed.
 
 ### 4. LED deferral (no cosmetic writes mid-move)
 
@@ -101,7 +105,9 @@ then cost at most one ~25ms bitbang per ~150ms during a move.
   one timer, single generation on fire.
 - `test_sr_led_writes_defer_while_steps_execute` — cosmetic deferral via a
   simulated busy toolhead.
+- `test_sr_writes_wait_for_every_motor_on_the_mcu` — idler moving + selector
+  DIR write → write lands after the idler's move; both later moves wait for it.
 
-Harness quirk: the fake MCU's print clock is offset negative and moves leave
-a pending write behind — normalize `_pending_write_start` / `_last_write_end`
-to `now_pt` before asserting timing (the tests show the pattern).
+Harness quirk: the fake MCU's print clock is offset negative and never
+advances during moves, so moves leave writes and step horizons behind — call
+`quiet_shift_register()` before asserting timing.
