@@ -1077,8 +1077,9 @@ class MmuStepper(ExtruderStepper):
         curtime = self.printer.get_reactor().monotonic()
         now_pt = mcu.estimated_print_time(curtime)
         base = move_time if move_time is not None else now_pt
-        # Lead for the write (USB CDC latency) and a gap after the previous
-        # move's steps; the shift register also waits for other motors' steps.
+        # A gap after the previous move's steps. The shift register adds its own
+        # send lead (USB CDC) and waits for other motors' steps; the move then
+        # waits for the write below.
         sched_time = max(now_pt + 0.100, base + 0.005)
         self._enable_before_move(sched_time)
         vpin = self._dir_sr_pin

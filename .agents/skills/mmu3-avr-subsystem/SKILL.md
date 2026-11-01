@@ -84,7 +84,7 @@ machine); see the references for the full derivations:
   overflow the move queue (the live 12:17 AM failure that motivated the fix).
 - The four-layer design in `extras/shift_register.py` + `mmu_stepper.py`:
   1. **Coalescing**: at most one pending write; state changes merge into it
-     (latest wins), generation deferred to ~50ms before start. A burst of
+     (latest wins), generation deferred to `_WRITE_LEAD` (250ms) before start. A burst of
      DIR flips + LED frames collapses to 1-2 bitbangs.
   2. **Real-time gating**: a new write behind an in-flight one schedules
      after `_last_write_end` instead of overlapping.
@@ -102,7 +102,7 @@ machine); see the references for the full derivations:
      `print_time`.
   4. **LED deferral**: bits in `led_mask` (config, `0xFF00` on MMU3) are
      cosmetic — while the toolhead is ahead of the MCU their writes are
-     pushed to `est + 0.150` (and past every motor's steps, per layer 3).
+     pushed to `est + 0.300` (and past every motor's steps, per layer 3).
 - `_set_bit_at_time` returns the *actual* scheduled start (post-merge /
   post-deferral); `get_writes_end()` covers pending, in-flight and the
   deferred initial write. Moves must wait on `get_writes_end()`.
@@ -128,6 +128,13 @@ machine); see the references for the full derivations:
   without re-verifying on the AVR.
 - Bootup autohome is deferred until the clock estimate is reliable
   (commit `04f93269`) for the same reason.
+- **Send lead `_WRITE_LEAD` = 250ms**: every write (urgent or pending) is
+  generated at least 250ms before its first clock. A pin whose FIRST command
+  arrives after its clock (empty pin queue → `sched_add_timer` in the past)
+  shuts the MCU down with "Timer too close". With the old 50ms pending lead,
+  one retransmit (25ms RTO) of the ~530-byte, 9-message burst made the latch
+  command (last message) arrive 12ms late — T1→T0 toolchange crash. Don't
+  shrink it.
 - A `minclock=0` burst of 50 commands ≈ 300 bytes can exceed the 192-byte
   RX window → retransmits (`bytes_retransmit` in Stats) — another reason to
   keep write *count* low (coalescing) rather than larger bursts.

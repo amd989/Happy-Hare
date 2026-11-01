@@ -46,14 +46,15 @@ All in `extras/shift_register.py` (+ `mmu_stepper.py:_pre_set_dir_pin`).
 - If a write is **in flight** (`print_time < _last_write_end`): schedule ONE
   follow-up at `_last_write_end + 0.001`.
 - Otherwise: if `print_time` is far enough out, defer generation via a
-  reactor timer (~50ms lead, `_fire_pending_write`); else generate now.
+  reactor timer (`_WRITE_LEAD` = 250ms lead, `_fire_pending_write`); else
+  generate now (still at least 250ms ahead).
 
 A DIR-flip storm + LED frames collapse to 1-2 bitbangs.
 
 ### 2. Real-time gating (no overlapping writes)
 
 The in-flight branch above never overlaps bitbangs; generation happens no
-earlier than ~50ms before the scheduled start.
+earlier than `_WRITE_LEAD` (250ms) before the scheduled start.
 
 ### 3. All-motor gating (no bitbang during ANY motor's steps)
 
@@ -79,10 +80,20 @@ stopgap `idler_release_to_away: 0` was reverted once this landed.
 
 `led_mask` config option (MMU3: `0xFF00`, bits 8-15). A write touching only
 masked bits while the toolhead is ahead of the MCU (`print_time >
-est_print_time + 0.050`) is pushed to `est_print_time + 0.150`. LED frames
-then cost at most one ~25ms bitbang per ~150ms during a move.
+est_print_time + 0.050`) is pushed to `est_print_time + 0.300`. LED frames
+then cost at most one ~25ms bitbang per ~300ms during a move.
 
 ## USB CDC timing hazards
+
+- **Send lead (`_WRITE_LEAD` = 250ms)**: a write's 50 commands go out as ~9
+  messages (~530 bytes), more than the 32u4's 192-byte receive window, so the
+  host sends them in windows and one lost/late ACK costs a 25ms+ RTO. Any pin
+  whose first command reaches the MCU after its clock (its queue empty) trips
+  `sched_add_timer` → **"Timer too close"**. Live failure (T1→T0 toolchange,
+  50ms pending lead): the latch pin's first command sat in the last message,
+  was retransmitted, and arrived 12ms late (shutdown clock 11.9ms after the
+  latch clock; `bytes_retransmit` 361→809). Test:
+  `test_sr_writes_are_sent_well_ahead_of_their_first_command`.
 
 - **Clock-sync convergence**: after MCU connect, `estimated_print_time` can
   be off by 1.5-2s (Caterina/USB CDC latency). The initial SR write is

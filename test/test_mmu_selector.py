@@ -1271,7 +1271,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         """
         LED bits (led_mask 0xFF00) are cosmetic: a write requested while the
         toolhead has steps queued past the MCU's actual position is pushed to
-        ~150ms past the execution horizon instead of bitbanging mid-move.
+        ~300ms past the execution horizon instead of bitbanging mid-move.
         """
         sr, reactor, now_pt = self.quiet_shift_register()
 
@@ -1279,10 +1279,44 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         setattr(toolhead, 'print_time', now_pt + 1.0)   # simulate busy
         try:
             start = sr._set_bit_at_time(8, 1, now_pt + 0.105)  # LED bit 8
-            self.assertEqual(start, now_pt + 0.150)  # deferred past horizon
+            self.assertAlmostEqual(start, now_pt + 0.300)  # deferred past horizon
             self.assertEqual((sr.state >> 8) & 1, 1)
         finally:
             delattr(toolhead, 'print_time')
+
+    def test_sr_writes_are_sent_well_ahead_of_their_first_command(self):
+        """
+        Live MMU3 failure (T1->T0 toolchange): a pending write was generated only
+        ~47ms before its first command. The ~530-byte burst overruns the 32u4's
+        receive window, one message was retransmitted (25ms RTO), and the latch
+        pin's first command arrived 12ms after its clock -> "Timer too close".
+        Every write, urgent or pending, must be sent >= 200ms ahead.
+        """
+        sr, reactor, now_pt = self.quiet_shift_register()
+        mcu = sr.mcu
+
+        def first_clock_lead(sent_before):
+            new = [c for c in mcu.sent_commands[sent_before:] if 'queue_digital_out' in c[0]]
+            self.assertTrue(new, 'no bitbang was sent')
+            first = min(mcu.clock_to_print_time(c[1][1]) for c in new)
+            return first - mcu.estimated_print_time(reactor.monotonic())
+
+        # Urgent (stale) request: generated at once, but scheduled far enough out
+        sent = len(mcu.sent_commands)
+        sr._set_bit_at_time(4, 1, now_pt)
+        self.assertIsNone(sr._pending_write_start)
+        self.assertGreaterEqual(first_clock_lead(sent), 0.2)
+
+        # Pending request: its timer fires early enough to leave the same lead
+        sr, reactor, now_pt = self.quiet_shift_register()
+        start = sr._set_bit_at_time(4, 0, now_pt + 2.0)
+        timer = sr._pending_timer
+        self.assertIsNotNone(timer)
+        sent = len(mcu.sent_commands)
+        reactor.advance(timer.waketime - reactor.monotonic())
+        self.assertIsNone(sr._pending_write_start, 'the pending write did not fire')
+        self.assertGreaterEqual(first_clock_lead(sent), 0.2)
+        self.assertAlmostEqual(start, now_pt + 2.0)
 
     def test_sr_writes_wait_for_every_motor_on_the_mcu(self):
         """

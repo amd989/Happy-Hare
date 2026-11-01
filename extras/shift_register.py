@@ -57,6 +57,13 @@ _LOW  = 0
 # Gap between the last step of any motor on the MCU and the start of a bitbang
 _STEP_CLEARANCE = 0.005
 
+# How far ahead of its first command a write is sent. A bitbang is ~9 messages
+# (~530 bytes) over USB CDC, more than the 32u4's receive window, and every
+# command must reach the MCU before its clock: a pin whose first command arrives
+# late shuts it down ("Timer too close"). With a 50ms lead one retransmit (25ms
+# RTO, doubling) made the latch command arrive 12ms late on the live MMU3.
+_WRITE_LEAD = 0.250
+
 
 class _RawDigitalOut:
     """
@@ -327,7 +334,7 @@ class ShiftRegister:
 
         Instead, defer the actual write until 30 seconds of host wall-clock
         time have elapsed. By then Klipper's clock sync has converged to
-        within <1ms, so a 100ms lead time is ample.
+        within <1ms, so the normal _WRITE_LEAD is ample.
 
         NOTE: TMC2130 software SPI init completes in the first few seconds,
         so the 30s delay also cleanly avoids the SPI/SR race condition.
@@ -343,7 +350,7 @@ class ShiftRegister:
         Clock sync is fully converged at this point, so estimated_print_time
         with a short lead time is accurate.
         """
-        print_time = self.mcu.estimated_print_time(eventtime + 0.100)
+        print_time = self.mcu.estimated_print_time(eventtime + _WRITE_LEAD)
         self._initial_write_done = True
         self._write_register(print_time)
         return self.printer.get_reactor().NEVER
@@ -407,7 +414,7 @@ class ShiftRegister:
             end = max(end, self._pending_write_start + self._write_duration())
         if not self._initial_write_done and self._initial_write_time is not None:
             # Changes ride along with the deferred initial write
-            initial = self.mcu.estimated_print_time(self._initial_write_time + 0.100)
+            initial = self.mcu.estimated_print_time(self._initial_write_time + _WRITE_LEAD)
             end = max(end, initial + self._write_duration())
         return end
 
@@ -439,14 +446,12 @@ class ShiftRegister:
             # seen when a motor enable or DIR change landed ~13s after connect).
             # The new state goes out with the deferred initial write; report that
             # time so callers (e.g. _pre_set_dir_pin) wait for it.
-            return self.mcu.estimated_print_time(self._initial_write_time + 0.100)
-        # Guarantee at least 100ms into the future from NOW.
-        # This handles stale print_times (e.g. SET_PIN with no recent moves).
-        # 100ms is ample once Klipper's clock sync has converged; for the
-        # first ~5s after MCU connect the clock may be off by more, but
-        # _delayed_sr_write ensures the hardware is in a known state by 30s.
+            return self.mcu.estimated_print_time(self._initial_write_time + _WRITE_LEAD)
+        # Guarantee at least _WRITE_LEAD into the future from NOW, so the whole
+        # burst reaches the MCU before its first clock even after a retransmit.
+        # This also handles stale print_times (e.g. SET_PIN with no recent moves).
         curtime = self.printer.get_reactor().monotonic()
-        min_time = self.mcu.estimated_print_time(curtime + 0.100)
+        min_time = self.mcu.estimated_print_time(curtime + _WRITE_LEAD)
         if print_time < min_time:
             print_time = min_time
         if not self._use_spi:
@@ -470,10 +475,10 @@ class ShiftRegister:
         instead of one per change, which is what overflowed the AVR move queue
         when 2-3 writes piled up around a gear move.
 
-        Generation is deferred until just before the scheduled start so that
-        any changes arriving in the meantime merge into this one write, while
-        still leaving enough lead for the burst (minclock=0) to reach the MCU
-        before its scheduled times.
+        Generation is deferred until _WRITE_LEAD before the scheduled start so
+        that any changes arriving in the meantime merge into this one write,
+        while still leaving enough lead for the burst (minclock=0) to reach the
+        MCU before its scheduled times.
 
         Returns the print_time the write is scheduled at (the pending write's
         start if merged), so callers like _pre_set_dir_pin can delay a move
@@ -497,13 +502,13 @@ class ShiftRegister:
             # A write is still executing: queue ONE follow-up write that
             # starts after it, instead of overlapping another bitbang.
             print_time = self._last_write_end + 0.001
-        if print_time > self.mcu.estimated_print_time(curtime + 0.100):
+        if print_time > self.mcu.estimated_print_time(curtime + _WRITE_LEAD):
             # Not needed yet -- defer generation until just before start so
             # any further state changes merge into this single write.
             self._pending_write_start = print_time
             lead = print_time - self.mcu.estimated_print_time(curtime)
             self._pending_timer = reactor.register_timer(
-                self._fire_pending_write, curtime + max(0., lead - 0.050))
+                self._fire_pending_write, curtime + max(0., lead - _WRITE_LEAD))
             return print_time
         return self._write_register(print_time)
 
@@ -530,9 +535,9 @@ class ShiftRegister:
         """Push a cosmetic (LED) write past the current step execution horizon.
 
         LED state is not timing-critical, so while the host has steps queued
-        that the MCU hasn't executed yet, the write is pushed ~150ms past the
+        that the MCU hasn't executed yet, the write is pushed ~300ms past the
         MCU's actual position. Once there, the pending-write coalescing keeps
-        LED frames at worst one 25ms bitbang per ~150ms during a move instead
+        LED frames at worst one 25ms bitbang per ~300ms during a move instead
         of one per frame.
         """
         toolhead = self.printer.lookup_object('toolhead', None)
@@ -544,7 +549,7 @@ class ShiftRegister:
         print_time = getattr(toolhead, 'print_time', est_print_time)
         if print_time > est_print_time + 0.050:
             # Steps are executing -- land the write just past the horizon
-            return max(requested, est_print_time + 0.150)
+            return max(requested, est_print_time + _WRITE_LEAD + 0.050)
         return requested
 
     def _write_register(self, print_time):
