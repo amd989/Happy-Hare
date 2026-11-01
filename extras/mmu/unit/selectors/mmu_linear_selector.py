@@ -128,14 +128,12 @@ class LinearSelectorParameters(TunableParametersBase):
                 'cad_bypass_offset': 0.0,   # MMU3 has no bypass
                 'cad_last_gate_offset': 18.5,# Last gate (57mm) to the far hard stop (~75.5mm)
                 # Idler barrel positions (units of motor travel at rd=40,
-                # 1 unit = 9deg) from the homed silicone stop. Derived from
-                # Prusa's factory geometry (prusa-firmware-mmu config.h:
-                # slots 58-218deg at 40deg pitch from the far endstop, idle
-                # 18deg from it, measured ~225deg stop-to-stop), ordered to
-                # match the selector: gate 0 is the left-most lane (slot 1),
-                # gate 4 the right-most (slot 5), last entry the idle position.
-                # Positions vary by about a slot between units: calibrate them.
-                'cad_idler_offsets': [2.0, 6.4, 10.9, 15.3, 19.7, 23.5],
+                # 1 unit = 9deg) from home, which is the same end Prusa
+                # firmware homes to. They are Prusa's idlerSlotPositions
+                # (config.h): slot 1 at 218deg ... slot 5 at 58deg, 40deg
+                # pitch, idle at 18deg. Gate 0 is slot 1, last entry is idle.
+                # Verified slot by slot on a live MMU3 (2026-11-01).
+                'cad_idler_offsets': [24.2, 19.8, 15.3, 10.9, 6.4, 2.0],
             })
 
         return cad

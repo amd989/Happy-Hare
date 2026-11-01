@@ -1104,7 +1104,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         hh.boot()                                   # no calibrate -> no seeding
         selector = {u.name: u for u in hh.mmu.mmu_machine.units}['unit0'].selector
         self.assertEqual(selector.idler.idler_offsets,
-                         [2.0, 6.4, 10.9, 15.3, 19.7, 23.5])
+                         [24.2, 19.8, 15.3, 10.9, 6.4, 2.0])
         from extras.mmu.unit.mmu_calibrator import CALIBRATED_SELECTOR
         self.assertTrue(selector.calibrator.check_calibrated(CALIBRATED_SELECTOR))
 
@@ -1259,13 +1259,13 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         lives on the SHR16 shift register (dir_sr_pin config) and is written
         from Python before every move through the resolved ShiftRegisterBit.
 
-        After MMU_HOME the idler sits at position 0 (the silicone stop it
-        homed against), so a move to gate 2 is forward (logical dir 0 ->
-        physical 0) and a move back to gate 0 is backward (logical dir 1 ->
-        physical 1 without inversion). The idler homes toward the silicone
-        stop at position 0, so the DIR bit is NOT inverted (mmu_sr:4) --
-        with the old ! inversion the homing pressed the far hard endstop
-        instead (verified on the live MMU3).
+        After MMU_HOME the idler sits at position 0, the same end Prusa
+        firmware homes to. The DIR bit is inverted (!mmu_sr:4) so homing goes
+        to that end. With the harness's seeded offsets (rising with the gate,
+        gate 0 at 0) a move out to gate 2 is forward (logical dir 0 ->
+        physical 1) and a move back to gate 0 is backward (logical dir 1 ->
+        physical 0). Without the inversion the idler homed into the soft
+        silicone stop at the other end, whose homing point drifts.
         """
         idler = self.idler()
         sr = self.hh.printer.lookup_object('shift_register mmu_sr')
@@ -1274,12 +1274,12 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         vpin = idler.idler_stepper._dir_sr_pin
         self.assertIsNotNone(vpin)
         self.assertEqual(vpin._bit_num, 4)   # Idler DIR is SR bit 4
-        self.assertEqual(vpin._invert, 0)    # config says mmu_sr:4 (no inversion)
+        self.assertEqual(vpin._invert, 1)    # config says !mmu_sr:4
 
-        idler._set_idler_to_gate(2)   # 0 -> 16: forward, dir 0 -> physical 0
-        self.assertEqual((sr.state >> 4) & 1, 0)
-        idler._set_idler_to_gate(0)   # 16 -> 0: backward, dir 1 -> physical 1
+        idler._set_idler_to_gate(2)   # forward, dir 0 -> physical 1
         self.assertEqual((sr.state >> 4) & 1, 1)
+        idler._set_idler_to_gate(0)   # backward, dir 1 -> physical 0
+        self.assertEqual((sr.state >> 4) & 1, 0)
 
 
 class TestMultiUnitSelectors(SelectorTestCase):

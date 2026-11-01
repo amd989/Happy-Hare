@@ -714,8 +714,9 @@ class TestEveryBootableProfile(unittest.TestCase):
         }
         expected_bit = {'gear': 0, 'selector': 2, 'idler': 4}
         # gear mmu_sr:0 NOT inverted (positive moves load, verified live); selector
-        # !mmu_sr:2 inverted so it homes at the slot-1 end like Prusa firmware
-        expected_invert = {'gear': 0, 'selector': 1, 'idler': 0}
+        # !mmu_sr:2 and idler !mmu_sr:4 inverted so both home at the same ends as
+        # Prusa firmware
+        expected_invert = {'gear': 0, 'selector': 1, 'idler': 1}
 
         for name, stepper in steppers.items():
             with self.subTest(stepper=name):

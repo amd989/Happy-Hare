@@ -73,10 +73,10 @@ if BOARD_TYPE_PRUSA_MMU3_1_0
   config PIN_IDLER_DIR
     default "$(MCU_NAME):PF3"   # Dummy -- real DIR is on the shift register
   config PIN_IDLER_DIR_SR
-    default "mmu_sr:4"   # NOT inverted -- the idler homes toward the silicone
-                         # stop at position 0; with the inverted bit the homing
-                         # pressed the far (hard) endstop instead (verified on
-                         # the live MMU3: endstop-to-endstop 25.5 units ~ 225deg)
+    default "!mmu_sr:4"  # Inverted: the idler homes at the same end as Prusa's
+                         # firmware, so the slot positions are Prusa's angles
+                         # (idlerSlotPositions) at 9 degrees per unit. The other
+                         # end is a soft silicone stop whose homing point drifts
   config PIN_IDLER_ENABLE
     default "!mmu_sr:5"
   config PIN_IDLER_DIAG
