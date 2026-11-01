@@ -38,23 +38,25 @@ All in `extras/shift_register.py` (+ `mmu_stepper.py:_pre_set_dir_pin`).
 
 ### 1. Coalescing (bounded write count)
 
-`_request_write(print_time, bit_num)`:
+`_request_write(print_time, bit_num, old_state)` keeps `_pending_writes`, a
+queue of scheduled-but-not-generated writes; only the last is open (reads
+`self.state` when generated → latest-state-wins).
 
-- If a write is **pending** (scheduled, not yet generated): merge — return
-  the pending start, do nothing else. The pending write reads `self.state`
-  when it generates → latest-state-wins.
-- If a write is **in flight** (`print_time < _last_write_end`): schedule ONE
-  follow-up at `_last_write_end + 0.001`.
-- Otherwise: if `print_time` is far enough out, defer generation via a
-  reactor timer (`_WRITE_LEAD` = 250ms lead, `_fire_pending_write`); else
-  generate now (still at least 250ms ahead).
+- A change merges into the open write only if that write starts after every
+  motor's steps (`start >= get_steps_end()`). Otherwise a move between them
+  needs the earlier state: the open write is frozen with `old_state` and a new
+  write is queued after it. (Before, a gear buzz +0.8/-0.8 queued back to back
+  merged the second flip into the first move's write and ran it backwards.)
+- `_set_bit_at_time` schedules nothing if the state didn't change.
 
-A DIR-flip storm + LED frames collapse to 1-2 bitbangs.
+### 2. One bitbang on the MCU at a time
 
-### 2. Real-time gating (no overlapping writes)
-
-The in-flight branch above never overlaps bitbangs; generation happens no
-earlier than `_WRITE_LEAD` (250ms) before the scheduled start.
+Each write is generated `_WRITE_LEAD` (250ms) before its start, by its own
+reactor timer, and never before the previous write has run: its start is at
+least previous end + 250ms. So at most ~50 SR nodes are on the 32u4 at once.
+Live failure this prevents (first T0 load, gear buzz): with 250ms lead and no
+such rule, bitbang N+1 arrived while bitbang N's 50 nodes were still queued,
+plus the gear's queue_step nodes → "Move queue overflow".
 
 ### 3. All-motor gating (no bitbang during ANY motor's steps)
 
@@ -118,6 +120,9 @@ then cost at most one ~25ms bitbang per ~300ms during a move.
   simulated busy toolhead.
 - `test_sr_writes_wait_for_every_motor_on_the_mcu` — idler moving + selector
   DIR write → write lands after the idler's move; both later moves wait for it.
+- `test_sr_writes_are_sent_well_ahead_of_their_first_command` — >=200ms lead.
+- `test_sr_buzz_keeps_one_bitbang_on_the_mcu_and_each_move_its_direction` —
+  buzz queued ahead: SR nodes in flight <= 50, each move its own direction.
 
 Harness quirk: the fake MCU's print clock is offset negative and never
 advances during moves, so moves leave writes and step horizons behind — call

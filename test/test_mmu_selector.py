@@ -1097,8 +1097,12 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         sr = self.hh.printer.lookup_object('shift_register mmu_sr')
         reactor = self.hh.printer.get_reactor()
         now_pt = sr.mcu.estimated_print_time(reactor.monotonic())
-        sr._pending_write_start = None
+        sr._cancel_pending_writes()
         sr._last_write_end = now_pt
+        # Writes are only scheduled for real changes; the SR tests set the
+        # idler's DIR/ENABLE bits to 1, so start them at 0
+        sr._set_bit(4, 0)
+        sr._set_bit(5, 0)
         for get_steps_end in sr._motion_sources:
             stepper = get_steps_end.__self__
             stepper._steps_end = stepper.next_cmd_time = now_pt
@@ -1250,10 +1254,11 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         now_pt = sr.mcu.estimated_print_time(reactor.monotonic())
 
         # Model a fresh connect: the initial write is still 25s away
-        sr._pending_write_start = None
+        sr._cancel_pending_writes()
         sr._last_write_end = now_pt
         sr._initial_write_done = False
         sr._initial_write_time = reactor.monotonic() + 25.0
+        sr._set_bit(4, 0)
         end_before = sr._last_write_end
 
         start = sr._set_bit_at_time(4, 1, now_pt + 0.1)    # idler DIR, urgent
@@ -1309,7 +1314,7 @@ class TestPrusaIdlerSelector(SelectorTestCase):
 
         # Pending request: its timer fires early enough to leave the same lead
         sr, reactor, now_pt = self.quiet_shift_register()
-        start = sr._set_bit_at_time(4, 0, now_pt + 2.0)
+        start = sr._set_bit_at_time(4, 1, now_pt + 2.0)
         timer = sr._pending_timer
         self.assertIsNotNone(timer)
         sent = len(mcu.sent_commands)
@@ -1317,6 +1322,68 @@ class TestPrusaIdlerSelector(SelectorTestCase):
         self.assertIsNone(sr._pending_write_start, 'the pending write did not fire')
         self.assertGreaterEqual(first_clock_lead(sent), 0.2)
         self.assertAlmostEqual(start, now_pt + 2.0)
+
+    def test_sr_buzz_keeps_one_bitbang_on_the_mcu_and_each_move_its_direction(self):
+        """
+        Live MMU3 failure (first T0 load, gear buzz): with writes sent 250ms ahead,
+        the next bitbang (~50 move-queue nodes) reached the 32u4 while the previous
+        one had not run yet, on top of the gear's queue_step nodes -> "Move queue
+        overflow" (~113 nodes). A write may only be generated once the previous
+        one has run, so at most one bitbang's nodes are ever on the MCU.
+
+        Same sequence: a buzz (+0.8, -0.8, +0.8, -0.8) queued back to back used
+        to merge a later DIR flip into the pending write of the move before it,
+        so that move ran in the wrong direction. Every move must start with the
+        direction it asked for, and no bitbang may overlap a move.
+        """
+        sr, reactor, now_pt = self.quiet_shift_register()
+        mcu = sr.mcu
+        gear = self.sr_stepper(sr, 0)               # gear DIR is SR bit 0
+        gear._dir_sr_last = 0
+        sr._set_bit(0, gear._dir_sr_pin._invert)    # logical 0 (forward) on the pins
+        state_before = sr.state
+
+        writes = []
+        write_register = sr._write_register
+        def recording_write(print_time, state=None):
+            gen = mcu.estimated_print_time(reactor.monotonic())
+            sent = len(mcu.sent_commands)
+            start = write_register(print_time, state)
+            clocks = [c[1][1] for c in mcu.sent_commands[sent:] if 'queue_digital_out' in c[0]]
+            writes.append({'gen': gen, 'start': start, 'end': sr._last_write_end,
+                           'state': sr.state if state is None else state, 'clocks': clocks})
+            return start
+        sr._write_register = recording_write
+
+        moves = []
+        t, pos = now_pt, gear.commanded_pos
+        for dist in (0.8, -0.8, 0.8, -0.8):
+            pos += dist
+            end = gear._submit_move(t, pos, 25., 800.)
+            moves.append({'start': gear.manual_trapq.moves[-1]['print_time'], 'end': end,
+                          'dir': 0 if dist > 0 else 1})
+            t = end
+        reactor.advance(5.)
+        self.assertEqual(sr._pending_writes, [], 'a write never went out')
+        self.assertTrue(writes)
+
+        for i, move in enumerate(moves):
+            # The register state when the move starts: the last write done by then
+            done = [w for w in writes if w['end'] <= move['start']]
+            state = done[-1]['state'] if done else state_before
+            self.assertEqual(state & 1, move['dir'] ^ gear._dir_sr_pin._invert,
+                             'move %d ran in the wrong direction' % i)
+            for w in writes:
+                self.assertFalse(w['start'] < move['end'] and move['start'] < w['end'],
+                                 'a bitbang overlaps move %d' % i)
+
+        for i, w in enumerate(writes):
+            self.assertGreaterEqual(w['start'] - w['gen'], 0.2, 'write %d sent too late' % i)
+            # Move-queue nodes held by bitbangs when this one is sent: every command
+            # (its own included) that has not run yet
+            gen_clock = mcu.print_time_to_clock(w['gen'])
+            nodes = sum(1 for o in writes[:i + 1] for c in o['clocks'] if c > gen_clock)
+            self.assertLessEqual(nodes, 50, 'write %d: two bitbangs on the MCU at once' % i)
 
     def test_sr_writes_wait_for_every_motor_on_the_mcu(self):
         """

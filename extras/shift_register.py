@@ -248,19 +248,22 @@ class ShiftRegister:
         # and ride along with that write. None = no connect yet.
         self._initial_write_time = None
         self._initial_write_done = False
-        # End print_time of the most recently scheduled bitbang; used to
+        # End print_time of the most recently generated bitbang; used to
         # serialize writes so two overlapping bitbangs never send the MCU
-        # timer dispatcher backwards ("Rescheduled timer in the past").
+        # timer dispatcher backwards ("Rescheduled timer in the past"), and so
+        # the next one is only generated once this one has run (move queue).
         self._last_write_end = 0.
-        # Coalescing: at most ONE write may be pending (state changed but the
-        # bitbang commands not yet generated). A pending write reads the
-        # current state when it generates, so any further changes merge into
-        # it -- latest state wins. Without this, bursts of back-to-back state
-        # changes (DIR flips, enables, LED frames) each produced a 50-command
-        # bitbang and 2-3 of them piled up around a gear move overflowed the
-        # ATmega32U4's move queue (verified on the live MMU3).
-        self._pending_write_start = None
-        self._pending_timer = None
+        # Writes scheduled but not yet generated, in start order. Each is a dict
+        # {'start', 'state', 'timer'}. Only the last may be open (state None:
+        # reads the live state when generated, so later changes merge into it
+        # -- latest state wins). Without coalescing, bursts of state changes
+        # (DIR flips, enables, LED frames) each produced a 50-command bitbang
+        # and 2-3 of them around a gear move overflowed the ATmega32U4's move
+        # queue (verified on the live MMU3). A change must NOT merge into a
+        # write that lands before another motor's steps, though, or that move
+        # runs with the later state: the open write is then frozen with the
+        # earlier state and a new write follows it.
+        self._pending_writes = []
         # Bits that are purely cosmetic (e.g. LEDs). Writes touching ONLY
         # these may be deferred while steps are executing, since the ~25ms
         # bitbang would otherwise stall step execution on the AVR timer.
@@ -410,13 +413,28 @@ class ShiftRegister:
         a bitbang.
         """
         end = self._last_write_end
-        if self._pending_write_start is not None:
-            end = max(end, self._pending_write_start + self._write_duration())
+        if self._pending_writes:
+            end = max(end, self._pending_writes[-1]['start'] + self._write_duration())
         if not self._initial_write_done and self._initial_write_time is not None:
             # Changes ride along with the deferred initial write
             initial = self.mcu.estimated_print_time(self._initial_write_time + _WRITE_LEAD)
             end = max(end, initial + self._write_duration())
         return end
+
+    @property
+    def _pending_write_start(self):
+        """Start of the last (open) pending write, or None."""
+        return self._pending_writes[-1]['start'] if self._pending_writes else None
+
+    @property
+    def _pending_timer(self):
+        return self._pending_writes[-1]['timer'] if self._pending_writes else None
+
+    def _cancel_pending_writes(self):
+        reactor = self.printer.get_reactor()
+        for write in self._pending_writes:
+            reactor.unregister_timer(write['timer'])
+        self._pending_writes = []
 
     # -- Internal state management -------------------------------------------
 
@@ -431,15 +449,18 @@ class ShiftRegister:
         """Update bit state and schedule a register write at print_time.
 
         Ensures a minimum future margin so queue_digital_out commands don't
-        arrive at the MCU after their scheduled time ("Rescheduled timer in
-        the past"). This can happen when print_time comes from a stale
-        toolhead position (e.g. SET_PIN with no recent moves).
+        arrive at the MCU after their scheduled time ("Timer too close"). This
+        can happen when print_time comes from a stale toolhead position (e.g.
+        SET_PIN with no recent moves).
 
         Returns the actual print_time the write was scheduled at (which may
-        be later than requested if it had to be deferred behind an in-flight
-        shift register write or merged into a pending one).
+        be later than requested if it had to wait for another shift register
+        write or merged into a pending one).
         """
+        old_state = self.state
         self._set_bit(bit_num, value)
+        if self.state == old_state:
+            return print_time # Nothing changed -- no write needed
         if not self._initial_write_done and self._initial_write_time is not None:
             # Too early after connect to schedule a timed write: a bitbang with a
             # 100ms lead arrived late and shut the MCU down ("Timer too close",
@@ -462,32 +483,40 @@ class ShiftRegister:
             quiet = self.get_steps_end() + _STEP_CLEARANCE
             if print_time < quiet:
                 print_time = quiet
-        return self._request_write(print_time, bit_num)
+        return self._request_write(print_time, bit_num, old_state)
 
-    def _request_write(self, print_time, bit_num):
+    def _request_write(self, print_time, bit_num, old_state):
         """
-        Schedule a bitbang of the current register state.
+        Schedule a write carrying the change from `old_state` to self.state.
 
-        Coalescing: if a write is already pending (scheduled but not yet
-        generated) the request merges into it -- the pending write reads the
-        current state when it generates, so latest-state-wins. This turns
-        bursts of back-to-back state changes into a single 50-command bitbang
-        instead of one per change, which is what overflowed the AVR move queue
-        when 2-3 writes piled up around a gear move.
+        Coalescing: if the open pending write (scheduled but not yet generated)
+        lands after every motor's steps, the change merges into it -- it reads
+        self.state when it generates, so latest-state-wins. This turns bursts of
+        back-to-back state changes into a single 50-command bitbang instead of
+        one per change, which is what overflowed the AVR move queue when 2-3
+        writes piled up around a gear move. If a motor steps after the open
+        write starts (e.g. a gear buzz queued ahead: +0.8mm then -0.8mm), that
+        move needs the earlier state: the open write is frozen with `old_state`
+        and a new write follows it.
 
-        Generation is deferred until _WRITE_LEAD before the scheduled start so
-        that any changes arriving in the meantime merge into this one write,
-        while still leaving enough lead for the burst (minclock=0) to reach the
-        MCU before its scheduled times.
+        One bitbang on the MCU at a time: a write is generated _WRITE_LEAD
+        before its start (retransmit margin), and only once the previous write
+        has run, so its start is at least _WRITE_LEAD after the previous one
+        ends. Two 50-node bitbangs plus a gear move's accel steps overflowed
+        the 32u4's ~113-node move queue ("Move queue overflow").
 
         Returns the print_time the write is scheduled at (the pending write's
-        start if merged), so callers like _pre_set_dir_pin can delay a move
-        until the write completes.
+        start if merged). Moves wait on get_writes_end().
         """
-        if self._pending_write_start is not None:
-            # Merge into the pending write -- it reads self.state at
-            # generation time, so there is nothing further to schedule.
-            return self._pending_write_start
+        reactor = self.printer.get_reactor()
+        curtime = reactor.monotonic()
+        if self._pending_writes:
+            last = self._pending_writes[-1]
+            if last['state'] is None and last['start'] >= self.get_steps_end():
+                # Nothing steps after it starts: merge (it reads self.state)
+                return last['start']
+            if last['state'] is None:
+                last['state'] = old_state # Freeze: steps after it need this state
 
         # Cosmetic bits (LEDs): defer while steps are executing. The bitbang
         # monopolizes the AVR timer for ~25ms; letting it run mid-move stalls
@@ -496,40 +525,48 @@ class ShiftRegister:
         if self.led_mask and (1 << bit_num) & self.led_mask and not self._use_spi:
             print_time = self._defer_cosmetic_write(print_time)
 
-        reactor = self.printer.get_reactor()
-        curtime = reactor.monotonic()
-        if print_time < self._last_write_end:
-            # A write is still executing: queue ONE follow-up write that
-            # starts after it, instead of overlapping another bitbang.
-            print_time = self._last_write_end + 0.001
+        # Generate only once the previous write has run
+        if self._pending_writes:
+            prev_end = self._pending_writes[-1]['start'] + self._write_duration()
+        else:
+            prev_end = self._last_write_end
+        print_time = max(print_time, prev_end + _WRITE_LEAD)
         if print_time > self.mcu.estimated_print_time(curtime + _WRITE_LEAD):
-            # Not needed yet -- defer generation until just before start so
-            # any further state changes merge into this single write.
-            self._pending_write_start = print_time
+            # Not needed yet -- generate _WRITE_LEAD before start so further
+            # state changes can merge into this write.
+            write = {'start': print_time, 'state': None, 'timer': None}
             lead = print_time - self.mcu.estimated_print_time(curtime)
-            self._pending_timer = reactor.register_timer(
-                self._fire_pending_write, curtime + max(0., lead - _WRITE_LEAD))
+            write['timer'] = reactor.register_timer(
+                lambda eventtime, w=write: self._fire_write(w, eventtime),
+                curtime + max(0., lead - _WRITE_LEAD))
+            self._pending_writes.append(write)
             return print_time
         return self._write_register(print_time)
 
-    def _fire_pending_write(self, eventtime):
-        """Reactor callback: generate the pending write's bitbang.
+    def _fire_write(self, write, eventtime):
+        """Reactor callback: generate a pending write's bitbang.
 
-        Reads the current register state, so every change that merged into
-        this pending write lands in a single bitbang.
+        An open write reads the current register state, so every change that
+        merged into it lands in a single bitbang; a frozen one sends its state.
         """
         reactor = self.printer.get_reactor()
-        start = self._pending_write_start
-        self._pending_write_start = None
-        self._pending_timer = None
-        if start is None:
+        if write not in self._pending_writes:
             return reactor.NEVER
-        curtime = reactor.monotonic()
-        now_pt = self.mcu.estimated_print_time(curtime)
+        self._pending_writes.remove(write)
+        start = write['start']
+        now_pt = self.mcu.estimated_print_time(reactor.monotonic())
         if start < now_pt:
             start = now_pt
-        self._write_register(start)
+        self._write_register(start, write['state'])
         return reactor.NEVER
+
+    def _fire_pending_write(self, eventtime):
+        """Generate the earliest pending write now (as its timer would)."""
+        if not self._pending_writes:
+            return self.printer.get_reactor().NEVER
+        write = self._pending_writes[0]
+        self.printer.get_reactor().unregister_timer(write['timer'])
+        return self._fire_write(write, eventtime)
 
     def _defer_cosmetic_write(self, print_time):
         """Push a cosmetic (LED) write past the current step execution horizon.
@@ -552,7 +589,7 @@ class ShiftRegister:
             return max(requested, est_print_time + _WRITE_LEAD + 0.050)
         return requested
 
-    def _write_register(self, print_time):
+    def _write_register(self, print_time, state=None):
         """
         Bitbang the current state to the shift register chain.
 
@@ -579,14 +616,15 @@ class ShiftRegister:
 
         Returns the actual print_time the write started at.
         """
+        if state is None:
+            state = self.state
         if self._use_spi:
-            return self._write_register_spi(print_time)
+            return self._write_register_spi(print_time, state)
         if print_time < self._last_write_end:
             print_time = self._last_write_end
         mcu_freq = self.mcu.seconds_to_clock(1.0)
         dt = 8000.0 / mcu_freq  # 8000 ticks = 500μs between commands (USB CDC jitter safety)
 
-        state = self.state
         t = print_time
         # Publish the end time BEFORE generating: a request arriving while the
         # commands are being sent must see this write as in-flight, or it would
@@ -614,7 +652,7 @@ class ShiftRegister:
 
         return print_time
 
-    def _write_register_spi(self, print_time):
+    def _write_register_spi(self, print_time, state):
         """
         Shift the current register state out via the software SPI bus and
         strobe LATCH.
@@ -633,7 +671,6 @@ class ShiftRegister:
         Returns the actual print_time the LATCH fires at (when the new
         state becomes visible on the outputs).
         """
-        state = self.state
         data = state.to_bytes(self.num_bits // 8, 'big')
         reactor = self.printer.get_reactor()
         curtime = reactor.monotonic()
