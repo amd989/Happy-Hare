@@ -270,8 +270,16 @@ class MmuController(MmuFilamentMovement):
         except Exception as e:
             self.log_error('Error trying to wrap PAUSE/RESUME/CLEAR_PAUSE/CANCEL_PRINT macros: %s' % e)
 
-        # Schedule bootup tasks to run after klipper and hopefully spoolman have settled
-        self._schedule_mmu_bootup_tasks(BOOT_DELAY)
+        # Schedule bootup tasks to run after klipper and hopefully spoolman have settled.
+        # On a shift register MMU (Prusa MMU3) every bootup move can need a shift register
+        # write (stepper DIR/ENABLE), and the ATmega32U4's clock estimate lags reality for
+        # many seconds after connect: a timed write that early shuts the MCU down with
+        # "Timer too close" / "Rescheduled timer in the past". Run the whole bootup after
+        # the shift register's own deferred first write instead.
+        delay = BOOT_DELAY
+        if self._has_shift_register():
+            delay += BOOT_CLOCK_CONVERGENCE_DELAY
+        self._schedule_mmu_bootup_tasks(delay)
 
         # Send event to allow modules to finalize configuration now everything is loaded
         self.log_debug("MMU Initialization Complete -------------------------------\n")
@@ -314,6 +322,10 @@ class MmuController(MmuFilamentMovement):
             self._set_unit_selected(0)
 
 
+    def _has_shift_register(self):
+        return any('shift_register' in obj for obj in self.printer.objects)
+
+
     def _schedule_mmu_bootup_tasks(self, delay=0.):
         waketime = self.reactor.monotonic() + delay
         self.reactor.register_callback(lambda pt: self.psm.print_event("__MMU_BOOTUP"), waketime)
@@ -322,9 +334,9 @@ class MmuController(MmuFilamentMovement):
     cmd_MMU_BOOTUP_help = "Internal commands to complete bootup of MMU"
     def _bootup_autohome(self):
         """
-        Deferred bootup autohoming of all units plus reselection of the last
-        used gate. Runs 30s after connect so the MCU clock estimate is
-        reliable -- see the comment at the call site in cmd_MMU_BOOTUP.
+        Bootup autohoming of all units plus reselection of the last used gate.
+        On shift register machines all of bootup already runs after the MCU
+        clock estimate settles (see where bootup is scheduled).
         """
         try:
             # Autohoming...
@@ -438,23 +450,9 @@ class MmuController(MmuFilamentMovement):
                 # This is recoverable so just report errors
                 self.log_error(str(e))
 
-            # Autohoming and gate reselect move the selector/idler through the
-            # shift register and trigger TMC SPI register writes during the
-            # homing moves. Both are scheduled against the MCU clock estimate,
-            # which can lag reality for several seconds after connect on the
-            # ATmega32U4 (USB CDC latency while the boot command flood is in
-            # flight) -- a timed command that arrives after its scheduled
-            # clock shuts the MCU down with "Rescheduled timer in the past"
-            # (verified on the live MMU3: every boot crashed inside
-            # __MMU_BOOTUP until this was deferred). Only machines with a
-            # shift register (Prusa MMU3) pay this 30s cost; everyone else
-            # homes synchronously as before.
-            if any('shift_register' in obj for obj in self.printer.objects):
-                self.reactor.register_callback(
-                    lambda pt: self._bootup_autohome(),
-                    self.reactor.monotonic() + BOOT_CLOCK_CONVERGENCE_DELAY)
-            else:
-                self._bootup_autohome()
+            # Autohoming and gate reselect. Shift register machines run all of bootup
+            # late enough for this to be safe (see where bootup is scheduled)
+            self._bootup_autohome()
 
             # Initial state (this will also enable the leds with opening effect)
             self.psm.set_print_state("initialized")

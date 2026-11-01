@@ -407,6 +407,41 @@ class TestConnect(BootedSessionMixin, unittest.TestCase):
         self.assertTrue(self.hh.fired('klippy:connect'))
 
 
+class TestShiftRegisterBootupWaitsForClockSync(unittest.TestCase):
+    """
+    The Prusa MMU3 drives stepper DIR/ENABLE through a shift register whose
+    writes are timed MCU commands. Right after connect the ATmega32U4's clock
+    estimate is unreliable, so any bootup move that needs a write (homing the
+    idler the other way, for one) shut the MCU down with "Timer too close".
+    Bootup on a shift register machine must wait for the clock to settle.
+    """
+
+    def test_bootup_waits_for_the_clock_on_a_shift_register_machine(self):
+        hh = session('prusa_mmu3')
+        from extras.mmu.mmu_constants import BOOT_DELAY, BOOT_CLOCK_CONVERGENCE_DELAY
+        try:
+            hh.build(); hh.connect(); hh.ready()
+            hh.reactor.advance(BOOT_DELAY + 1.)
+            self.assertFalse(hh.fired('mmu:bootup'), 'bootup ran before the MCU clock settled')
+            self.assertNotIn('Homing MMU Idler', '\n'.join(hh.console))
+            hh.reactor.advance(BOOT_CLOCK_CONVERGENCE_DELAY)
+            # Only the timing is under test: this stepwise boot skips the fake idler
+            # endstop setup boot() does, so its homing can't succeed here
+            self.assertTrue(hh.fired('mmu:bootup'))
+        finally:
+            hh.close()
+
+    def test_other_machines_still_boot_promptly(self):
+        hh = session('boxturtle')
+        from extras.mmu.mmu_constants import BOOT_DELAY
+        try:
+            hh.build(); hh.connect(); hh.ready()
+            hh.reactor.advance(BOOT_DELAY + 1.)
+            self.assertTrue(hh.fired('mmu:bootup'))
+        finally:
+            hh.close()
+
+
 class TestReady(BootedSessionMixin, unittest.TestCase):
     """A4: klippy:ready."""
 

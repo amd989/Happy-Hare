@@ -1444,7 +1444,13 @@ class Session:
             if pre_bootup is not None:
                 pre_bootup()
             self.install_macro_effects()
-            self.reactor.advance(BOOT_DELAY + extra)
+            # Shift register machines (Prusa MMU3) schedule bootup after the MCU clock
+            # estimate settles (extras/mmu/mmu_controller.py, where bootup is scheduled)
+            boot_delay = BOOT_DELAY
+            if any('shift_register' in name for name in self.printer.objects):
+                from extras.mmu.mmu_constants import BOOT_CLOCK_CONVERGENCE_DELAY
+                boot_delay += BOOT_CLOCK_CONVERGENCE_DELAY
+            self.reactor.advance(boot_delay + extra)
             self._settle_nfc_init(extra)
             self._booted = True
         return self
