@@ -15,6 +15,7 @@
 #   PARAM_BOWDEN_UNLOAD_HOMING_BUFFER
 #   PARAM_EXTRUDER_HOMING_ENDSTOP
 #   PARAM_EXTRUDER_HOMING_MAX
+#   PARAM_EXTRUDER_UNLOAD_ASSIST
 
 # Gate homing preference flags (hidden)
 config PREFERS_CHOICE_GATE_HOMING_ENDSTOP_EXTRUDER
@@ -348,6 +349,16 @@ config BOOL_EXTRUDER_HOMING_SYNC
     int
     default 1 if BOOL_EXTRUDER_HOMING_SYNC
     default 0
+
+  config PARAM_EXTRUDER_UNLOAD_ASSIST
+    float
+    prompt "Extruder unload assist (mm) " if MMU_HAS_SENSOR_EXTRUDER
+    default 0
+    help
+      Distance the extruder keeps turning with the gear after the extruder
+      entry sensor reads empty on unload, so a tip still in the extruder
+      gears is driven out rather than pulled against a holding extruder
+      (e.g. an MK3S IR sensor that sees a thin tip as empty). 0 = off.
 
 
   # -------------------------------------

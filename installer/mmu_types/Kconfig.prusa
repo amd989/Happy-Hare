@@ -144,6 +144,13 @@ if MMU_TYPE_PRUSA_MMU3_3_0
   config PARAM_GEAR_SHORT_MOVE_ACCEL
     default 800
 
+  config PARAM_EXTRUDER_UNLOAD_ASSIST
+    default 40
+    help
+      Like stock Prusa firmware (MMU2::HelpUnloadToFinda): the MK3S IR
+      sensor can read a thin tip as empty while it is still in the extruder
+      gears. 40mm drives it out; tested on a live MK3S + MMU3.
+
   config PARAM_IDLER_GEAR_RATIO
     default "1:1"
   config PARAM_IDLER_ROTATION_DISTANCE

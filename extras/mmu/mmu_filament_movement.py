@@ -2234,6 +2234,31 @@ class MmuFilamentMovement:
                         "toolhead, but the extruder sensor does not detect filament. "
                         "Possible sensor malfunction."
                     )
+
+                # Optional assist (off when 0): an entry sensor can read empty while the tip
+                # is still in the extruder gears (e.g. the MK3S IR sensor sees a thin tip as
+                # no filament). Keep the extruder turning with the gear so the tip is driven
+                # out instead of pulled against a holding extruder. Prusa's firmware does the
+                # same (MMU2::HelpUnloadToFinda). Counted as overshoot so the bowden unload
+                # is shortened by the same distance.
+                assist = u.p.extruder_unload_assist
+                if assist > 0:
+                    self.log_debug("Extruder unload assist: moving %.1fmm (synced) past the extruder sensor" % assist)
+                    self.move_filament(
+                        "Extruder unload assist",
+                        -assist,
+                        speed=speed,
+                        motor=motor,
+                        wait=True,
+                    )
+                    overshoot += assist
+                    entry_datum_established = False
+                    self.set_filament_pos_state(FILAMENT_POS_END_BOWDEN)
+                    self.drive().set_filament_position(
+                        -(u.toolhead_wrapper.p.toolhead_extruder_to_nozzle
+                          + u.toolhead_wrapper.p.toolhead_entry_to_extruder
+                          + assist)
+                    )
             else:
                 # -------------------------------------------------------------------------------
                 # NEXT BEST: With toolhead sensor we first home to toolhead sensor.
